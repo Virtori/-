@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b1017">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="BodyDream Elite — персональный офлайн-тренер: силовые, футбол, техника, питание и прогресс.">
+  <title>BodyDream Coach • Redmi Note 13 Pro</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="appbar">
+    <div class="brandmark"><span class="mark">B<span class="mark-dot">.</span></span><div><b>BodyDream <span class="brand-alt">ELITE</span></b><small>ТВОЯ СИСТЕМА ТРЕНИРОВОК</small></div></div>
+    <div class="appbar-right"><span class="offline-dot" aria-hidden="true"></span><span>ОФЛАЙН</span><button class="icon-btn" onclick="App.go('settings')" aria-label="Настройки">⚙</button></div>
+  </header>
+  <main id="main" aria-live="polite"></main>
+  <nav id="bottomNav" class="bottom-nav" aria-label="Главное меню">
+    <button data-page="home" class="nav-btn active" onclick="App.go('home')"><span class="nav-ico">⌂</span><span>Сегодня</span></button>
+    <button data-page="plan" class="nav-btn" onclick="App.go('plan')"><span class="nav-ico">▦</span><span>План</span></button>
+    <button data-page="tech" class="nav-btn" onclick="App.go('tech')"><span class="nav-ico">◎</span><span>Техника</span></button>
+    <button data-page="progress" class="nav-btn" onclick="App.go('progress')"><span class="nav-ico">↗</span><span>Форма</span></button>
+    <button data-page="food" class="nav-btn" onclick="App.go('food')"><span class="nav-ico">◈</span><span>Питание</span></button>
+    <button data-page="settings" class="nav-btn" onclick="App.go('settings')"><span class="nav-ico">⚙</span><span>Ещё</span></button>
+  </nav>
+  <section class="runner" id="runner" hidden aria-label="Активная тренировка">
+    <div id="runnerContent"></div>
+  </section>
+  <div id="toast" class="toast" role="status" aria-live="assertive" hidden></div>
+  <input id="backupImport" type="file" accept="application/json,.json" hidden onchange="App.readBackupFile(this.files)">
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
