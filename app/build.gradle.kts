@@ -7,11 +7,11 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.bodydream.trainer"
+        applicationId = "com.bodydream.trainer.journey"
         minSdk = 24
         targetSdk = 35
-        versionCode = 6
-        versionName = "4.2.0-redmi"
+        versionCode = 7
+        versionName = "4.3.0-journey"
     }
 
     buildTypes {

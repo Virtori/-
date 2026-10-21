@@ -1,4 +1,4 @@
-/* BodyDream Elite 4.2 • Offline personal coach
+/* BodyDream Elite 4.3 • Offline personal coach
    No remote requests; recommendations are transparent training rules, not medical/AI diagnoses. */
 (function () {
 'use strict';
@@ -139,7 +139,7 @@ function normalizeState(raw){
     for(const [key,value] of Object.entries(input))if(groceryIds.has(key)&&value===true)checks[key]=true;
     out.groceryChecks[date]=checks;
   }
-  if(['home','plan','tech','exercise','checkin','progress','food','settings'].includes(src.lastPage))out.lastPage=src.lastPage;
+  if(['home','plan','tech','exercise','checkin','progress','food','settings','journey'].includes(src.lastPage))out.lastPage=src.lastPage;
   return out;
 }
 
@@ -198,8 +198,8 @@ function makeIcon(id){return D.plans[id]?.icon||'⏱'}
 function nav(pageId){document.querySelectorAll('.nav-btn').forEach(x=>x.classList.toggle('active',x.dataset.page===pageId));}
 function go(which,arg){
   if(videoURL&&(which!=='exercise'||arg!==detailId)){URL.revokeObjectURL(videoURL);videoURL=null}
-  page=which;detailId=arg||null;state.lastPage=which;save();nav(['home','plan','tech','progress','food','settings'].includes(which)?which:(which==='diagnostics'?'settings':'tech'));
-  if(which==='home')renderHome();else if(which==='plan')renderPlan();else if(which==='tech')renderTech();else if(which==='exercise')renderExercise(arg);else if(which==='checkin')renderCheckin();else if(which==='progress')renderProgress();else if(which==='food')renderFood();else if(which==='settings')renderSettings();else if(which==='diagnostics')renderDiagnostics();else renderHome();
+  page=which;detailId=arg||null;state.lastPage=which;save();nav(['home','plan','tech','progress','food','settings','journey'].includes(which)?which:(which==='diagnostics'?'settings':'tech'));
+  if(which==='home')renderHome();else if(which==='plan')renderPlan();else if(which==='tech')renderTech();else if(which==='exercise')renderExercise(arg);else if(which==='checkin')renderCheckin();else if(which==='progress')renderProgress();else if(which==='food')renderFood();else if(which==='journey')renderJourney();else if(which==='settings')renderSettings();else if(which==='diagnostics')renderDiagnostics();else renderHome();
   window.scrollTo({top:0,behavior:'instant'});
 }
 function showRunner(){const el=$('runner');el.hidden=false;document.body.style.overflow='hidden';try{Android?.keepAwake?.(true)}catch(e){}renderRunner();}
@@ -238,11 +238,85 @@ function weeklyReview(){
  return `<div class="section-head"><h3>Итоги недели</h3><span class="muted small">${esc(start)} — ${esc(end)}</span></div><div class="card"><div class="grid2"><div class="metric"><small>Силовые</small><div class="num">${strength}<span class="unit">/3</span></div><b>Техника + прогресс</b></div><div class="metric"><small>Футбол</small><div class="num">${football}<span class="unit">/${targetFootball}</span></div><b>Игры и выносливость</b></div></div><div class="tip" style="margin-top:14px">${esc(note)}</div></div>`;
 }
 
+// Progress is derived from saved records; duplicate sessions never farm points.
+let lastCelebration=null;
+function qualifyingSessions(today=dateKey()){
+ return state.history.filter(h=>h.date<=today && (h.plan==='football'
+   ? h.sets?.game?.some(x=>x.done)
+   : Object.values(h.sets||{}).flat().filter(x=>x.done&&x.reps>0).length>=3));
+}
+function journeyStats(today=dateKey()){
+ const history=qualifyingSessions(today),dates=new Map();
+ for(const h of history)dates.set(h.date,Math.max(dates.get(h.date)||0,h.plan==='football'?40:50));
+ const bodyDays=new Set(state.body.filter(x=>x.date<=today).map(x=>x.date));
+ const readyDays=Object.keys(state.readiness).filter(d=>d<=today);
+ const xp=[...dates.values()].reduce((a,b)=>a+b,0)+bodyDays.size*10+readyDays.length*5;
+ const strengthDays=new Set(history.filter(h=>D.plans[h.plan]?.kind==='strength').map(h=>h.date));
+ const footballDays=new Set(history.filter(h=>h.plan==='football').map(h=>h.date));
+ const weeks=new Map();
+ for(const d of dates.keys()){const w=weekStart(d);if(!weeks.has(w))weeks.set(w,new Set());weeks.get(w).add(d)}
+ // Two activity days make an active week. Rest days do not break the series.
+ const activeWeeks=new Set([...weeks].filter(([,days])=>days.size>=2).map(([w])=>w));
+ let cursor=weekStart(today),streak=0;
+ if(!activeWeeks.has(cursor))cursor=plusDays(cursor,-7);
+ while(activeWeeks.has(cursor)){streak++;cursor=plusDays(cursor,-7)}
+ const level=Math.floor(xp/300)+1,inside=xp%300;
+ return {history,dates,bodyDays,readyDays,xp,level,inside,streak,strengthDays,footballDays,activeWeeks};
+}
+function journeyBadges(j){
+ const plans=new Set(j.history.filter(h=>D.plans[h.plan]?.kind==='strength').map(h=>h.plan));
+ return [
+  {icon:'↗',title:'Первый шаг',hint:'Первая записанная тренировка',done:j.dates.size>=1},
+  {icon:'◈',title:'Три грани',hint:'Завершить зал A, B и C',done:['push','pull','legs'].every(p=>plans.has(p))},
+  {icon:'⚽',title:'Своя команда',hint:'5 разных дней с футболом',done:j.footballDays.size>=5},
+  {icon:'◎',title:'Наблюдатель',hint:'Измерения в 7 разных дней',done:j.bodyDays.size>=7},
+  {icon:'✦',title:'В ритме',hint:'4 недели с активностью от 2 дней',done:j.activeWeeks.size>=4},
+  {icon:'♡',title:'Забота о себе',hint:'7 проверок готовности в разные дни',done:j.readyDays.length>=7}
+ ];
+}
+function weeklyQuests(j,today=dateKey()){
+ const start=weekStart(today),inWeek=d=>d>=start&&d<=today;
+ return [
+  {icon:'◩',title:'Сила по плану',detail:'3 разных дня с силовыми',value:[...j.strengthDays].filter(inWeek).length,target:3,page:'plan'},
+  {icon:'⚽',title:'Время для игры',detail:'Футбольные дни по твоему графику',value:[...j.footballDays].filter(inWeek).length,target:state.settings.footballWednesday?3:2,page:'plan'},
+  {icon:'◎',title:'Наблюдай за формой',detail:'Измерения в 3 разных дня',value:[...j.bodyDays].filter(inWeek).length,target:3,page:'progress'},
+  {icon:'♡',title:'Сначала самочувствие',detail:'4 проверки готовности',value:j.readyDays.filter(inWeek).length,target:4,page:'checkin'}
+ ];
+}
+function levelTitle(level){return level<3?'Начало пути':level<6?'В своём ритме':level<10?'Привычка крепнет':'Верность системе'}
+function journeyTeaser(){const j=journeyStats(),quests=weeklyQuests(j),done=quests.filter(q=>q.value>=q.target).length;
+ return `<button class="journey-teaser" onclick="App.go('journey')"><span class="level-orb">${j.level}</span><span class="grow"><span class="overline">Твой маршрут · ${j.xp} XP</span><strong>${levelTitle(j.level)}</strong><span class="xp-track"><span style="width:${j.inside/3}%"></span></span><small>${done}/4 целей недели · до уровня ${j.level+1} ещё ${300-j.inside} XP</small></span><span aria-hidden="true">↗</span></button>`;
+}
+function personalRecords(j){
+ const records=[];
+ for(const [id,e] of Object.entries(D.exercises)){
+  if(!e.step)continue;let best=null;
+  for(const h of j.history)for(const row of h.sets?.[id]||[]){
+   if(row.done&&row.kg>0&&row.reps>0&&(!best||row.kg>best.kg||(row.kg===best.kg&&row.reps>best.reps)))best={...row,date:h.date};
+  }
+  if(best)records.push({id,name:e.name,...best});
+ }
+ return records;
+}
+function renderJourney(){
+ const j=journeyStats(),quests=weeklyQuests(j),badges=journeyBadges(j),today=dateKey(),start=plusDays(today,-27),records=personalRecords(j);
+ const finish=lastCelebration;lastCelebration=null;
+ $('main').innerHTML=`${header('Твой маршрут','BODYDREAM 4.3 · В СВОЁМ РИТМЕ')}
+ ${finish?`<div class="finish-card" role="status"><span class="finish-star">✦</span><div class="overline">Тренировка сохранена</div><h2>Ещё один шаг сделан</h2><p>${finish.sets} отмеченных подходов · +${finish.xp} XP</p>${finish.badges.length?`<div class="tag">Новое достижение: ${finish.badges.map(esc).join(', ')}</div>`:''}<div class="sub">${finish.xp?'Прогресс уже учтён в твоём маршруте.':'Баллы за этот день уже учтены, либо пока недостаточно отмеченных рабочих подходов.'}</div></div>`:''}
+ <div class="journey-hero"><div class="row"><div class="level-ring" style="--progress:${j.inside/3}%" role="img" aria-label="Уровень ${j.level}, ${j.inside} из 300 XP"><div><strong>${j.level}</strong><span>УРОВЕНЬ</span></div></div><div class="grow"><div class="overline">${levelTitle(j.level)}</div><h2>Регулярность<br>становится силой</h2><div class="sub">${j.xp} XP всего · ${300-j.inside} до следующего уровня</div></div></div><div class="journey-numbers"><div><strong>${j.dates.size}</strong><span>дней активности</span></div><div><strong>${j.streak}</strong><span>недель подряд*</span></div><div><strong>${badges.filter(b=>b.done).length}/6</strong><span>достижений</span></div></div></div>
+ <div class="section-head"><h3>Небольшие цели недели</h3><span class="tag">${quests.filter(q=>q.value>=q.target).length}/4</span></div>
+ <div class="quest-list">${quests.map(q=>`<button class="quest-card ${q.value>=q.target?'complete':''}" onclick="App.go('${q.page}')"><span class="quest-icon">${q.value>=q.target?'✓':q.icon}</span><span class="grow"><strong>${q.title}</strong><small>${q.detail}</small><span class="xp-track"><span style="width:${Math.min(100,q.value/q.target*100)}%"></span></span></span><b>${Math.min(q.value,q.target)}/${q.target}</b></button>`).join('')}</div>
+ <p class="small muted">Цели обновляются по понедельникам. Если нужно восстановление, цель может подождать: баллы не сгорают.</p>
+ <div class="section-head"><h3>Последние 28 дней</h3><span class="muted small">слева направо</span></div><div class="card"><div class="activity-days">${Array.from({length:28},(_,i)=>{const d=plusDays(start,i),active=j.dates.has(d),measured=j.bodyDays.has(d),ready=!!state.readiness[d];return `<div class="activity-day ${active?'trained':measured||ready?'cared':''} ${d===today?'current':''}" title="${esc(formatDate(d))}: ${active?'тренировка':measured||ready?'замер или самочувствие':'нет записей'}"><small>${D.days[dow(d)]}</small><b>${Number(d.slice(-2))}</b><span aria-hidden="true">${active?'●':measured||ready?'·':' '}</span></div>`}).join('')}</div><div class="activity-legend"><span><i class="trained"></i>Тренировка</span><span><i class="cared"></i>Забота о себе</span><span><i></i>Нет записей</span></div></div>
+ <div class="section-head"><h3>Твоя коллекция</h3></div><div class="badge-grid">${badges.map(b=>`<div class="badge-card ${b.done?'unlocked':''}"><span class="badge-symbol" aria-hidden="true">${b.icon}</span><span class="badge-status">${b.done?'✓ Получено':'Ещё впереди'}</span><strong>${b.title}</strong><p>${b.hint}</p></div>`).join('')}</div>
+ <div class="section-head"><h3>Лучшие записанные подходы</h3></div>${records.length?`<div class="card">${records.map(r=>`<button class="record-row" onclick="App.go('exercise','${r.id}')"><span class="grow"><strong>${esc(r.name)}</strong><small>${esc(formatDate(r.date))}</small></span><b>${fmt(r.kg)} кг <span>× ${r.reps}</span></b></button>`).join('')}</div>`:`<div class="card empty-journey"><span>↗</span><h3>Здесь будут твои ориентиры</h3><p>Записывай вес и повторы в тренировке. Лучшие подходы появятся автоматически.</p><button class="button dark" onclick="App.go('plan')">Открыть программу</button></div>`}
+ <details class="card journey-rules"><summary>Как считаются прогресс и баллы</summary><p>Силовой день с минимум 3 отмеченными подходами: 50 XP. Футбол с отмеченной игрой: 40 XP. За несколько тренировок в одну дату начисляется только наибольшее из этих значений. Вес снаряда и сложность не увеличивают награду.</p><p>Измерение: 10 XP за дату. Проверка самочувствия: 5 XP за дату. Будущие записи не учитываются. Каждый уровень — 300 XP. Эти игровые баллы не оценивают здоровье или физическую форму.</p><p>* Неделя считается активной при тренировках минимум в 2 разных дня. Текущая незавершённая неделя не обрывает серию. Дни отдыха не требуют записей. Личные ориентиры показывают наибольший записанный вес, затем число повторов; это не рекомендация увеличивать нагрузку.</p></details>`;
+}
 function renderHome(){
  const p=state.profile,k=todaysPlanId(),w=currentWeight(),r=readinessFor(),already=state.history.some(s=>s.date===dateKey()&&s.plan===k),active=state.active;
  const message=k?D.plans[k].title:'Восстановление и сон';
  const action=active?`<button class="button primary" onclick="App.resumeWorkout()">▶ Продолжить тренировку</button>`:k?`<button class="button primary" onclick="App.startWorkout('${k}')">▶ Начать тренировку</button>`:`<button class="button primary" onclick="App.go('checkin')">Проверить готовность</button>`;
- $('main').innerHTML=`<div class="hero"><span class="pill">${esc(D.daysLong[dow()])} · ${esc(formatDate(dateKey()))} · Кузбасс</span><div class="overline">Всё начинается с системы</div><h1>${esc(message)}</h1><p>${k?`${D.plans[k].short} · ${D.plans[k].duration} минут · тренировка по шагам`:'Сегодня нет силовой нагрузки по плану. Восстановление — часть результата.'}</p><div class="actions">${action}<button class="button outline" onclick="App.go('plan')">План недели ↗</button></div>${already?`<div class="tag" style="margin-top:14px">✓ Тренировка уже сохранена сегодня</div>`:''}</div>
+ $('main').innerHTML=`${journeyTeaser()}<div class="hero"><span class="pill">${esc(D.daysLong[dow()])} · ${esc(formatDate(dateKey()))} · Кузбасс</span><div class="overline">Всё начинается с системы</div><h1>${esc(message)}</h1><p>${k?`${D.plans[k].short} · ${D.plans[k].duration} минут · тренировка по шагам`:'Сегодня нет силовой нагрузки по плану. Восстановление — часть результата.'}</p><div class="actions">${action}<button class="button outline" onclick="App.go('plan')">План недели ↗</button></div>${already?`<div class="tag" style="margin-top:14px">✓ Тренировка уже сохранена сегодня</div>`:''}</div>
  <div class="grid2 grid4"><div class="metric"><small>Вес сейчас</small><div class="num">${fmt(w)}<span class="unit">кг</span></div><b>Старт ${fmt(p.startWeight)}</b></div><div class="metric"><small>Цель</small><div class="num">${fmt(p.targetWeight)}<span class="unit">кг</span></div><b>Без жёстких сроков</b></div><div class="metric"><small>Тренировки</small><div class="num">${completedThisWeek()}<span class="unit">/${thisWeekTarget()}</span></div><b>На этой неделе</b></div><div class="metric"><small>Питание</small><div class="num">${p.calories}<span class="unit">ккал</span></div><b>${p.protein} г белка — ориентир</b></div></div>
  <div class="section-head"><h3>Готовность к нагрузке</h3><button class="button icon" onclick="App.go('checkin')">${r?'Обновить':'Пройти чек'} ↗</button></div>
  <div class="card ${r?.mode==='stop'?'bad':r?.mode==='light'?'warn':'soft'}"><div class="readiness"><div class="readiness-score ${r?.mode==='normal'?'ok':r?.mode==='light'?'medium':r?.mode==='stop'?'stop':''}">${r?r.score:'?'}</div><div><b>${r?modeLabel(r.mode):'Как сегодня себя чувствуешь?'}</b><div class="sub">${esc(readinessText(r))}</div></div></div></div>
@@ -390,8 +464,9 @@ function renderFinish(){const s=state.active;if(!s)return;const p=D.plans[s.plan
 function setRating(r){feedbackRating=r;const pain=$('finishedPain')?.value||'none',note=$('finishedNote')?.value||'';renderFinish();if($('finishedPain'))$('finishedPain').value=pain;if($('finishedNote'))$('finishedNote').value=note}
 function finishWorkout(){const s=state.active;if(!s)return;const count=Object.values(s.sets).flat().filter(x=>x.done).length;
  if(!count&&!confirm('Не отмечено ни одного подхода. Сохранить тренировку без подходов?'))return;
+ const before=journeyStats(),beforeBadges=new Set(journeyBadges(before).filter(b=>b.done).map(b=>b.title));
  const record={...s,rating:feedbackRating,pain:$('finishedPain')?.value||'none',note:String($('finishedNote')?.value||'').slice(0,500),finishedAt:Date.now()};delete record.restUntil;
- state.history.push(record);state.active=null;if(!save()){state.history.pop();state.active=s;toast('Не удалось сохранить тренировку. Освободи место и повтори.');return}vibrate(180);speak('Тренировка завершена. Отличная работа.');hideRunner();toast('Тренировка сохранена в журнале');
+ state.history.push(record);state.active=null;if(!save()){state.history.pop();state.active=s;toast('Не удалось сохранить тренировку. Освободи место и повтори.');return}vibrate(180);speak('Тренировка завершена. Отличная работа.');hideRunner();const after=journeyStats();lastCelebration={sets:count,xp:after.xp-before.xp,badges:journeyBadges(after).filter(b=>b.done&&!beforeBadges.has(b.title)).map(b=>b.title)};go('journey');toast('Тренировка сохранена в журнале');
 }
 function trendData(metric='weight'){return state.body.filter(x=>numeric(x[metric])>0).sort((a,b)=>a.date.localeCompare(b.date)).slice(-30)}
 function graph(metric){const data=trendData(metric),label=metric==='weight'?'Вес, кг':'Талия, см';if(data.length<2)return `<div class="chart-empty">Добавь минимум два измерения, чтобы увидеть динамику.</div>`;
@@ -439,7 +514,7 @@ function diagnosticText(){
  try{localStorage.setItem(key,'1');if(localStorage.getItem(key)!=='1')throw Error('read error');localStorage.removeItem(key)}catch(e){storage='Недоступно: '+String(e.message||e).slice(0,100)}
  const bridge=!!window.Android?.exportData;
  const rows=[
-  'BodyDream Coach 4.2 / Redmi Note 13 Pro',
+  'BodyDream Coach 4.3 / Redmi Note 13 Pro',
   'Режим: '+(bridge?'Android APK / WebView':'браузерная демоверсия'),
   'Сохранение данных: '+storage,
   'Часовой пояс меню: '+ZONE,
@@ -460,7 +535,7 @@ function renderDiagnostics(){
 }
 
 function renderSettings(){const p=state.profile,s=state.settings;
- $('main').innerHTML=`${header('Настройки и данные','ПОД ТЕБЯ · ТОЛЬКО НА ТЕЛЕФОНЕ')}<div class="card"><h3>Твой профиль</h3><div class="form-grid" style="margin-top:14px"><div class="field-box"><label class="field" for="pfName">Имя</label><input id="pfName" class="input" value="${esc(p.name)}" maxlength="40"></div><div class="field-box"><label class="field" for="pfAge">Возраст</label><input id="pfAge" class="input" type="number" min="18" max="100" value="${p.age}"></div><div class="field-box"><label class="field" for="pfHeight">Рост, см</label><input id="pfHeight" class="input" type="number" min="120" max="230" value="${p.height}"></div><div class="field-box"><label class="field" for="pfStart">Старт, кг</label><input id="pfStart" class="input" type="number" min="35" max="250" step=".1" value="${p.startWeight}"></div><div class="field-box"><label class="field" for="pfTarget">Цель, кг</label><input id="pfTarget" class="input" type="number" min="35" max="250" step=".1" value="${p.targetWeight}"></div><div class="field-box"><label class="field" for="pfCals">Ккал/сутки</label><input id="pfCals" class="input" type="number" min="1200" max="5000" value="${p.calories}"></div><div class="field-box"><label class="field" for="pfProtein">Белок, г</label><input id="pfProtein" class="input" type="number" min="40" max="280" value="${p.protein}"></div></div><button class="button primary wide" onclick="App.saveProfile()">Сохранить профиль</button></div><div class="card"><h3>Тренировка и удобство</h3><div class="row" style="margin:15px 0"><div class="grow"><b>Вибрация</b><div class="sub">Подход завершён, отдых окончен</div></div><input type="checkbox" ${s.vibrate?'checked':''} onchange="App.toggleSetting('vibrate',this.checked)" style="width:22px;height:22px;accent-color:var(--lime)"></div><div class="divider"></div><div class="row" style="margin:15px 0"><div class="grow"><b>Голосовые подсказки</b><div class="sub">Если на телефоне есть русский голос TTS</div></div><input type="checkbox" ${s.voice?'checked':''} onchange="App.toggleSetting('voice',this.checked)" style="width:22px;height:22px;accent-color:var(--lime)"></div><div class="divider"></div><div class="row" style="margin:15px 0"><div class="grow"><b>Футбол по средам</b><div class="sub">Необязательно. Получится 3 футбольных дня (вт/ср/вс) и 3 зала. Повышенная нагрузка — следи за восстановлением.</div></div><input type="checkbox" ${s.footballWednesday?'checked':''} onchange="App.toggleSetting('footballWednesday',this.checked)" style="width:22px;height:22px;accent-color:var(--lime)"></div></div><div class="card soft"><h3>Резервная копия</h3><div class="sub" style="margin:7px 0 12px">Вес, тренировки, фото, питание и настройки сохраняются локально. Чтобы не потерять их при переустановке, скачай JSON-файл. Отправка в облако не происходит.</div><div class="actions"><button class="button primary" onclick="App.exportBackup()">↓ Сохранить JSON</button><button class="button dark" onclick="App.importBackup()">↑ Восстановить</button></div></div>${state.active?`<div class="card warn"><b>Незавершённая тренировка</b><div class="sub">${esc(D.plans[state.active.plan]?.title)}. Черновик хранится до завершения или удаления.</div><div class="actions"><button class="button primary" onclick="App.resumeWorkout()">Продолжить</button><button class="button danger" onclick="App.discardWorkout()">Удалить черновик</button></div></div>`:''}<div class="card"><h3>Проверка на Redmi</h3><div class="sub">При проблемах с установкой, сохранением или отображением можно посмотреть локальный отчёт без отправки данных.</div><button class="button dark wide" style="margin-top:12px" onclick="App.go('diagnostics')">Проверить приложение →</button></div><div class="card"><h3>Как работает персональный тренер</h3><div class="sub" style="margin-top:8px">Это автономные рекомендации по правилам (сон, боль, количество подходов, повторения и RIR). Никакой облачной нейросети и автоматического распознавания техники камерой здесь нет. Форма и питание оцениваются по твоим записям. При медицинских ограничениях проконсультируйся с профильным специалистом.</div><div class="divider"></div><div class="small muted">BodyDream Coach 4.2 • Redmi Note 13 Pro 4G/5G • HyperOS/MIUI • Кузбасс UTC+7 • Офлайн</div></div>`;
+ $('main').innerHTML=`${header('Настройки и данные','ПОД ТЕБЯ · ТОЛЬКО НА ТЕЛЕФОНЕ')}<div class="card"><h3>Твой профиль</h3><div class="form-grid" style="margin-top:14px"><div class="field-box"><label class="field" for="pfName">Имя</label><input id="pfName" class="input" value="${esc(p.name)}" maxlength="40"></div><div class="field-box"><label class="field" for="pfAge">Возраст</label><input id="pfAge" class="input" type="number" min="18" max="100" value="${p.age}"></div><div class="field-box"><label class="field" for="pfHeight">Рост, см</label><input id="pfHeight" class="input" type="number" min="120" max="230" value="${p.height}"></div><div class="field-box"><label class="field" for="pfStart">Старт, кг</label><input id="pfStart" class="input" type="number" min="35" max="250" step=".1" value="${p.startWeight}"></div><div class="field-box"><label class="field" for="pfTarget">Цель, кг</label><input id="pfTarget" class="input" type="number" min="35" max="250" step=".1" value="${p.targetWeight}"></div><div class="field-box"><label class="field" for="pfCals">Ккал/сутки</label><input id="pfCals" class="input" type="number" min="1200" max="5000" value="${p.calories}"></div><div class="field-box"><label class="field" for="pfProtein">Белок, г</label><input id="pfProtein" class="input" type="number" min="40" max="280" value="${p.protein}"></div></div><button class="button primary wide" onclick="App.saveProfile()">Сохранить профиль</button></div><div class="card"><h3>Тренировка и удобство</h3><div class="row" style="margin:15px 0"><div class="grow"><b>Вибрация</b><div class="sub">Подход завершён, отдых окончен</div></div><input type="checkbox" ${s.vibrate?'checked':''} onchange="App.toggleSetting('vibrate',this.checked)" style="width:22px;height:22px;accent-color:var(--lime)"></div><div class="divider"></div><div class="row" style="margin:15px 0"><div class="grow"><b>Голосовые подсказки</b><div class="sub">Если на телефоне есть русский голос TTS</div></div><input type="checkbox" ${s.voice?'checked':''} onchange="App.toggleSetting('voice',this.checked)" style="width:22px;height:22px;accent-color:var(--lime)"></div><div class="divider"></div><div class="row" style="margin:15px 0"><div class="grow"><b>Футбол по средам</b><div class="sub">Необязательно. Получится 3 футбольных дня (вт/ср/вс) и 3 зала. Повышенная нагрузка — следи за восстановлением.</div></div><input type="checkbox" ${s.footballWednesday?'checked':''} onchange="App.toggleSetting('footballWednesday',this.checked)" style="width:22px;height:22px;accent-color:var(--lime)"></div></div><div class="card soft"><h3>Резервная копия</h3><div class="sub" style="margin:7px 0 12px">Вес, тренировки, фото, питание и настройки сохраняются локально. Чтобы не потерять их при переустановке, скачай JSON-файл. Отправка в облако не происходит.</div><div class="actions"><button class="button primary" onclick="App.exportBackup()">↓ Сохранить JSON</button><button class="button dark" onclick="App.importBackup()">↑ Восстановить</button></div></div>${state.active?`<div class="card warn"><b>Незавершённая тренировка</b><div class="sub">${esc(D.plans[state.active.plan]?.title)}. Черновик хранится до завершения или удаления.</div><div class="actions"><button class="button primary" onclick="App.resumeWorkout()">Продолжить</button><button class="button danger" onclick="App.discardWorkout()">Удалить черновик</button></div></div>`:''}<div class="card"><h3>Проверка на Redmi</h3><div class="sub">При проблемах с установкой, сохранением или отображением можно посмотреть локальный отчёт без отправки данных.</div><button class="button dark wide" style="margin-top:12px" onclick="App.go('diagnostics')">Проверить приложение →</button></div><div class="card"><h3>Как работает персональный тренер</h3><div class="sub" style="margin-top:8px">Это автономные рекомендации по правилам (сон, боль, количество подходов, повторения и RIR). Никакой облачной нейросети и автоматического распознавания техники камерой здесь нет. Форма и питание оцениваются по твоим записям. При медицинских ограничениях проконсультируйся с профильным специалистом.</div><div class="divider"></div><div class="small muted">BodyDream Coach 4.3 • Redmi Note 13 Pro 4G/5G • HyperOS/MIUI • Кузбасс UTC+7 • Офлайн</div></div>`;
 }
 function saveProfile(){const fields={name:String($('pfName').value).trim().slice(0,40),age:numeric($('pfAge').value),height:numeric($('pfHeight').value),startWeight:numeric($('pfStart').value),targetWeight:numeric($('pfTarget').value),calories:numeric($('pfCals').value),protein:numeric($('pfProtein').value)};
  if(!fields.name||fields.age<18||fields.age>100||fields.height<120||fields.height>230||fields.startWeight<35||fields.startWeight>250||fields.targetWeight<35||fields.targetWeight>250||fields.calories<1200||fields.calories>5000||fields.protein<40||fields.protein>280){toast('Проверь значения профиля');return}

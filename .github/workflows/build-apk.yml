@@ -1,4 +1,4 @@
-name: Build BodyDream Coach 4.2 APK
+name: Build BodyDream Coach 4.3 APK
 
 on:
   workflow_dispatch:
@@ -40,6 +40,29 @@ jobs:
           node --check app/src/main/assets/data.js
           node --check app/src/main/assets/app.js
 
+      - name: Verify interface, progress and backup compatibility
+        env:
+          BODYDREAM_CHROME_PATH: /usr/bin/google-chrome
+        run: |
+          set -o pipefail
+          npm install --prefix "$RUNNER_TEMP/bodydream-ui" --no-audit --no-fund playwright@1.62.1
+          export NODE_PATH="$RUNNER_TEMP/bodydream-ui/node_modules"
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory app/src/main/assets > "$RUNNER_TEMP/bodydream-http.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+          curl --retry 10 --retry-connrefused --retry-delay 1 -fsS http://127.0.0.1:8765/ -o /dev/null
+          node tests/verify43.cjs 2>&1 | tee ui-test-output.txt
+
+      - name: Interface review images and test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: BodyDream-4.3-interface-review
+          path: |
+            *43*.png
+            ui-test-output.txt
+          if-no-files-found: ignore
+
       - name: Build debug APK
         run: |
           set -o pipefail
@@ -53,7 +76,7 @@ jobs:
       - name: Downloadable APK
         uses: actions/upload-artifact@v4
         with:
-          name: BodyDream-Coach-4.2-Redmi-APK
+          name: BodyDream-Coach-4.3-Redmi-APK
           path: |
             app/build/outputs/apk/debug/app-debug.apk
             app/build/outputs/apk/debug/APK-SHA256.txt
