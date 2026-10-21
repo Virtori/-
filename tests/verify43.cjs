@@ -4,6 +4,7 @@ const assert=require('node:assert/strict');
  const browser=await chromium.launch({headless:true,...(process.env.BODYDREAM_CHROME_PATH?{executablePath:process.env.BODYDREAM_CHROME_PATH}:{})});
  const page=await browser.newPage({viewport:{width:393,height:852},deviceScaleFactor:1});
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ page.on('dialog',d=>d.accept());
  await page.goto('http://127.0.0.1:8765');
  await page.evaluate(()=>App.go('journey'));
  await page.getByRole('heading',{name:'Твой маршрут',exact:true}).waitFor();
@@ -20,7 +21,7 @@ const assert=require('node:assert/strict');
   state.history=[session('push',-2),session('pull',-1),session('legs',0),session('legs',0),session('push',1)];
   state.body=[{date:plus(0),weight:84,waist:90},{date:plus(1),weight:83}];
   state.readiness={[t]:{sleep:8,energy:4,soreness:1,stress:1,pain:'none'}};
-  localStorage.setItem('bodydream_elite_v4',JSON.stringify(state));return {today:t,tomorrow:plus(1)};
+  BodyDreamReceiveBackup(JSON.stringify(state));return {today:t,tomorrow:plus(1)};
  });
  await page.reload();await page.evaluate(()=>App.go('journey'));
  assert.match(await page.locator('.journey-hero').innerText(),/165 XP/,'duplicates and future dates must not earn XP');
@@ -36,13 +37,12 @@ const assert=require('node:assert/strict');
  }
  // Restoring a version-4 backup must retain profile and history with derived badges.
  const backup=await page.evaluate(()=>localStorage.getItem('bodydream_elite_v4'));
- page.on('dialog',d=>d.accept());
  await page.evaluate(data=>BodyDreamReceiveBackup(data),backup);
  assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('bodydream_elite_v4')).profile.name),'Тестовый профиль');
  await page.evaluate(()=>App.go('journey'));
  assert.match(await page.locator('.journey-hero').innerText(),/165 XP/);
  // Finish a real session through the public app controls and reload it.
- await page.evaluate(()=>{const s=JSON.parse(localStorage.getItem('bodydream_elite_v4'));s.history=[];s.body=[];localStorage.setItem('bodydream_elite_v4',JSON.stringify(s))});
+ await page.evaluate(()=>{const s=JSON.parse(localStorage.getItem('bodydream_elite_v4'));s.history=[];s.body=[];BodyDreamReceiveBackup(JSON.stringify(s))});
  await page.reload();await page.evaluate(()=>App.startWorkout('push'));
  for(let i=0;i<3;i++)await page.evaluate(i=>{App.editSet('bench',i,'kg','20');App.editSet('bench',i,'reps','8');App.markSet('bench',i)},i);
  await page.evaluate(()=>App.finishWorkout());
