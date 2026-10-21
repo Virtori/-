@@ -44,7 +44,11 @@ const assert=require('node:assert/strict');
  // Finish a real session through the public app controls and reload it.
  await page.evaluate(()=>{const s=JSON.parse(localStorage.getItem('bodydream_elite_v4'));s.history=[];s.body=[];BodyDreamReceiveBackup(JSON.stringify(s))});
  await page.reload();await page.evaluate(()=>App.startWorkout('push'));
- for(let i=0;i<3;i++)await page.evaluate(i=>{App.editSet('bench',i,'kg','20');App.editSet('bench',i,'reps','8');App.markSet('bench',i)},i);
+ for(let i=0;i<3;i++){
+  await page.getByRole('spinbutton',{name:'Вес подхода '+(i+1),exact:true}).fill('20');
+  await page.getByRole('spinbutton',{name:'Повторения подхода '+(i+1),exact:true}).fill('8');
+  await page.getByRole('button',{name:'Завершить подход '+(i+1),exact:true}).click();
+ }
  await page.evaluate(()=>App.finishWorkout());
  assert.match(await page.locator('.finish-card').innerText(),/\+50 XP/);
  assert.match(await page.locator('.finish-card').innerText(),/Первый шаг/);
