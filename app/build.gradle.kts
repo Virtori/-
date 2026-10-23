@@ -7,11 +7,11 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.bodydream.trainer.journey"
+        applicationId = "com.bodydream.trainer.coach"
         minSdk = 24
         targetSdk = 35
-        versionCode = 7
-        versionName = "4.3.0-journey"
+        versionCode = 8
+        versionName = "4.4.0-coach"
     }
 
     buildTypes {
@@ -24,3 +24,4 @@ android {
     }
     buildFeatures { buildConfig = false }
 }
+

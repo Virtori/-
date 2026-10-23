@@ -64,3 +64,4 @@ const assert=require('node:assert/strict');
  console.log('PASS: empty and seeded journey, deduplicated XP, future exclusion, badges, records, tabs, backup restoration, workout completion, persistence and 320–768px layouts; no JS errors.');
  await browser.close();
 })().catch(e=>{console.error(e);process.exit(1)});
+

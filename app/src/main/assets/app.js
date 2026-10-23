@@ -1,4 +1,4 @@
-/* BodyDream Elite 4.3 • Offline personal coach
+/* BodyDream Elite 4.4 • Offline personal coach
    No remote requests; recommendations are transparent training rules, not medical/AI diagnoses. */
 (function () {
 'use strict';
@@ -20,7 +20,7 @@ function dateKey(d=new Date()){
 function dow(date=dateKey()){return new Date(date+'T12:00:00Z').getUTCDay()}
 function plusDays(date,amount){const d=new Date(date+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+amount);return d.toISOString().slice(0,10)}
 function weekStart(date=dateKey()){return plusDays(date,-((dow(date)+6)%7))}
-function newState(){return {version:4,profile:{name:'',age:30,height:170,startWeight:70,targetWeight:65,calories:2100,protein:150},readiness:{},history:[],active:null,body:[],photos:[],mealChecks:{},groceryChecks:{},settings:{vibrate:true,voice:false,footballWednesday:false},lastPage:'home'}}
+function newState(){return {version:4,profile:{name:'',age:30,height:170,startWeight:70,targetWeight:65,calories:2100,protein:150},readiness:{},history:[],active:null,body:[],photos:[],mealChecks:{},groceryChecks:{},settings:{vibrate:true,voice:false,footballWednesday:true},lastPage:'home'}}
 function migrateOld(source){
   try{
     const legacy=source||JSON.parse(localStorage.getItem(OLD_KEY)||'null');
@@ -55,7 +55,8 @@ const bounded = (v,lo,hi,def) => clamp(numeric(v,def),lo,hi);
 const safeText = (v,max=350) => String(typeof v==='string'?v:'').slice(0,max);
 const safeRecord = v => v&&typeof v==='object'&&!Array.isArray(v)?v:{};
 function cleanSets(raw,planId){
-  const out={},source=safeRecord(raw),allowed=new Set(D.plans[planId]?.ids||[]);
+  const ids=D.plans[planId]?.ids||[];
+  const out={},source=safeRecord(raw),allowed=new Set(ids.flatMap(id=>[id,...(D.alternatives[id]||[])]));
   for(const [id,items] of Object.entries(source)){
     if(!allowed.has(id)||!Array.isArray(items))continue;
     out[id]=items.slice(0,8).map(row=>{
@@ -79,8 +80,13 @@ function cleanSession(raw,active=false){
     mode:['normal','light'].includes(x.mode)?x.mode:'normal',
     index:Math.round(bounded(x.index,0,p.ids.length-1,0)),
     startedAt:bounded(x.startedAt,0,4102444800000,0),
-    sets:cleanSets(x.sets,p.id)
+    sets:cleanSets(x.sets,p.id),
+    format:x.format==='express'&&D.express[p.id]?'express':'full',
+    swaps:cleanSwaps(x.swaps,p.id)
   };
+  s.index=Math.min(s.index,sessionExerciseIds(s).length-1);
+  const usedIds=new Set(sessionExerciseIds(s));
+  s.sets=Object.fromEntries(Object.entries(s.sets).filter(([id])=>usedIds.has(id)));
   if(active){
     s.restUntil=x.restUntil===null||x.restUntil===undefined?null:bounded(x.restUntil,0,4102444800000,0);
   }else{
@@ -139,7 +145,7 @@ function normalizeState(raw){
     for(const [key,value] of Object.entries(input))if(groceryIds.has(key)&&value===true)checks[key]=true;
     out.groceryChecks[date]=checks;
   }
-  if(['home','plan','tech','exercise','checkin','progress','food','settings','journey'].includes(src.lastPage))out.lastPage=src.lastPage;
+  if(['home','plan','tech','exercise','checkin','progress','food','settings','journey','load'].includes(src.lastPage))out.lastPage=src.lastPage;
   return out;
 }
 
@@ -161,8 +167,8 @@ function planOn(day){if(day===3&&state.settings.footballWednesday)return 'footba
 function sessions(plan){return state.history.filter(s=>s.plan===plan).sort((a,b)=>(b.date||'').localeCompare(a.date||''))}
 function completedThisWeek(){const m=weekStart();return state.history.filter(s=>s.date>=m&&s.date<=plusDays(m,6)).length}
 function thisWeekTarget(){return state.settings.footballWednesday?6:5}
-function currentWeight(){const last=state.body.slice().sort((a,b)=>a.date.localeCompare(b.date)).at(-1);return last?.weight||state.profile.startWeight}
-function latestWaist(){return state.body.slice().sort((a,b)=>a.date.localeCompare(b.date)).filter(x=>x.waist>0).at(-1)?.waist||null}
+function currentWeight(){const last=state.body.filter(x=>x.date<=dateKey()).sort((a,b)=>a.date.localeCompare(b.date)).at(-1);return last?.weight||state.profile.startWeight}
+function latestWaist(){return state.body.filter(x=>x.date<=dateKey()).sort((a,b)=>a.date.localeCompare(b.date)).filter(x=>x.waist>0).at(-1)?.waist||null}
 function readinessFor(date=dateKey()){
   const r=state.readiness[date];if(!r)return null;
   const sleep=numeric(r.sleep,7),en=numeric(r.energy,3),sore=numeric(r.soreness,2),stress=numeric(r.stress,2);
@@ -178,28 +184,102 @@ function readinessText(r){
   return 'Восстановление позволяет выполнить план. Оставляй 2 повтора в запасе, вес повышай только при чистой технике.';
 }
 function effectiveSets(ex,mode){if(ex.group==='Футбол')return 1;return mode==='light'?Math.max(1,ex.sets-1):mode==='stop'?0:ex.sets}
-function lastResults(exId){return state.history.slice().reverse().flatMap(s=>s.sets?.[exId]?.some(x=>x.done)?[{session:s,sets:s.sets[exId]}]:[])}
+function lastResults(exId){return state.history.filter(s=>s.date<=dateKey()).slice().sort((a,b)=>b.date.localeCompare(a.date)||(b.finishedAt||0)-(a.finishedAt||0)).flatMap(s=>s.sets?.[exId]?.some(x=>x.done)?[{session:s,sets:s.sets[exId]}]:[])}
 function suggestion(exId){
- const ex=D.exercises[exId],h=lastResults(exId),last=h[0];
- if(!last)return {kind:'neutral',label:'Первое занятие',text:'Начни с лёгкого веса, с которым останется примерно 2–3 повтора в запасе.',weight:''};
- const v=last.sets.filter(x=>x.done&&numeric(x.reps)>0);if(!v.length)return {kind:'neutral',label:'Подбери нагрузку',text:'Нужны завершённые подходы.',weight:''};
- const weights=v.map(x=>numeric(x.kg,0)),weight=weights[weights.length-1],pain=last.session.pain!=='none';
- if(ex.step===0)return {kind:'neutral',label:'Качество важнее времени',text:'Сначала закрепи технику и устойчивость, затем добавляй повторы или секунды.',weight:0};
- if(pain)return {kind:'warn',label:'Без увеличения веса',text:'В прошлый раз была отмечена боль. Не повышай вес в провоцирующем упражнении.',weight};
- if(v.some(x=>x.rir!==null&&x.rir!==undefined&&numeric(x.rir)<=0))return {kind:'warn',label:'Оставь вес',text:'Был подход до отказа. Сохрани вес, добавляй чистые повторения.',weight};
- const strong=sets=>sets.length>=Math.min(ex.sets,2)&&sets.every(x=>x.done&&numeric(x.reps)>=ex.hi&&numeric(x.rir,2)>=2);
- if(h.length>=2&&strong(v)&&strong(h[1].sets.filter(x=>x.done&&numeric(x.reps)>0))) {
-    const prv=h[1].sets.find(x=>x.done);if(prv&&Math.abs(numeric(prv.kg)-weight)<=Math.max(1,ex.step*1.5))return {kind:'good',label:'Можно добавить вес',text:`Две тренировки подряд достигнут верх диапазона. Попробуй ${fmt(weight+ex.step)} кг (+${fmt(ex.step)}), сохраняя 2 повтора в запасе.`,weight:weight+ex.step};
+ const ex=D.exercises[exId],h=lastResults(exId),last=h[0],ready=readinessFor();
+ if(!last)return {kind:'neutral',label:'Первое занятие',text:'Подбери лёгкий вес для этого варианта отдельно. Запиши повторы и запас RIR.',weight:''};
+ const v=last.sets.filter(x=>x.done&&numeric(x.reps)>0),weight=v.at(-1)?.kg??'';
+ if(!v.length)return {kind:'neutral',label:'Подбери нагрузку',text:'Нужны завершённые подходы.',weight:''};
+ if(ready?.mode==='stop')return {kind:'warn',label:'Нагрузка на паузе',text:'В чеке отмечена резкая или необычная боль. Тренировку не начинай.',weight:''};
+ if(ready?.mode==='light')return {kind:'warn',label:'Облегчённый день',text:'Сегодня цель — комфортная нагрузка. Автоматического увеличения веса нет; подбери облегчённый вес по самочувствию.',weight:''};
+ if(!ready)return {kind:'neutral',label:'Сначала проверь готовность',text:'Оцени сон и самочувствие перед решением о прибавке.',weight};
+ if(ex.step===0)return {kind:'neutral',label:'Качество движения',text:'Сравни повторы или секунды с прошлым занятием. Не усложняй через боль.',weight:0};
+ const two=h.slice(0,2);
+ if(two.some(x=>x.session.pain!=='none'))return {kind:'warn',label:'Без увеличения веса',text:'В одной из двух последних тренировок отмечена боль. Подсказка увеличения веса отключена.',weight:''};
+ if(two.some(x=>x.session.mode==='light'))return {kind:'neutral',label:'После облегчённого дня',text:'Сначала закрепи обычную нагрузку. Сравнение с облегчённым занятием не даёт основания повышать вес.',weight};
+ if(v.some(x=>x.rir!==null&&x.rir!==undefined&&x.rir<=0))return {kind:'warn',label:'Оставь запас',text:'В журнале есть подход без запаса повторов. Сначала закрепи технику и повторения.',weight};
+ const complete=item=>{const rows=item.sets.filter(x=>x.done&&x.reps>0);return rows.length>=ex.sets&&rows.every(x=>x.kg>0&&x.reps>=ex.hi&&x.rir!==null&&x.rir!==undefined&&x.rir>=2)&&rows.every(x=>x.kg===weight)};
+ const distinct=two.length===2&&two[0].session.date!==two[1].session.date;
+ if(distinct&&two.every(complete)){
+   const increase=Math.round(ex.step/weight*100);
+   if(ex.step/weight<=.1)return {kind:'good',label:'Возможен небольшой шаг',text:`Два разных дня: все подходы на верхней границе, RIR ≥ 2 и одинаковый вес. Если техника комфортна, можно попробовать ${fmt(weight+ex.step)} кг (+${increase}%). Это подсказка по журналу, не обязательная прибавка.`,weight:weight+ex.step};
+   return {kind:'neutral',label:'Сначала закрепи повторы',text:'Стандартный шаг веса больше 10% текущей нагрузки. Автоприбавку не предлагаем.',weight};
  }
- if(v.some(x=>numeric(x.reps)<ex.lo-1))return {kind:'warn',label:'Вес может быть велик',text:'Некоторые подходы ниже рабочего диапазона. Уменьши вес или проверь отдых и технику.',weight};
- return {kind:'neutral',label:'Закрепляй нагрузку',text:'Оставь тот же вес и постепенно добирай повторения без рывков.',weight};
+ return {kind:'neutral',label:'Закрепляй результат',text:'Повторяй комфортную нагрузку и записывай все подходы с RIR. Для подсказки прибавки нужны два полных занятия в разные дни.',weight};
 }
+function sessionSlots(s){return s.format==='express'&&D.express[s.plan]?D.express[s.plan]:D.plans[s.plan]?.ids||[]}
+function sessionExerciseIds(s){return sessionSlots(s).map(id=>s.swaps?.[id]||id)}
+function cleanSwaps(raw,planId){
+ const out={},input=safeRecord(raw);
+ for(const id of D.plans[planId]?.ids||[])if((D.alternatives[id]||[]).includes(input[id]))out[id]=input[id];
+ return out;
+}
+function previousExerciseCard(id){
+ const old=lastResults(id)[0],rows=old?.sets.filter(x=>x.done&&x.reps>0)||[];
+ return `<div class="previous-card"><div class="spaced"><strong>В прошлый раз</strong><span class="muted small">${old?esc(formatDate(old.session.date)):'пока нет записей'}</span></div>${old?`<div class="previous-sets">${rows.map((x,i)=>`<span>${i+1}. <b>${x.kg===null?'—':fmt(x.kg)} кг × ${x.reps}</b> · RIR ${x.rir??'—'}</span>`).join('')}</div><button class="button dark wide" onclick="App.copyPrevious()">Подставить прошлые веса и повторы</button><small>Подставляются только незавершённые подходы. RIR оцени заново.</small>`:'<p>Начни с комфортного веса. История этого варианта появится после сохранения тренировки.</p>'}</div>`;
+}
+function copyPrevious(){
+ const s=state.active,e=activeExercise();if(!s||!e)return;
+ const id=sessionExerciseIds(s)[s.index],last=lastResults(id)[0];if(!last)return;
+ if(s.mode==='light'||(readinessFor()?.mode!=='normal'&&readinessFor())){toast('Сегодня отмечено ограничение нагрузки. Подбери вес заново.');return}
+ if(last.session.pain!=='none'){toast('В прошлой тренировке отмечена боль. Автоподстановка отключена.');return}
+ const source=last.sets.filter(x=>x.done&&x.reps>0),old=JSON.parse(JSON.stringify(s.sets));
+ const current=s.sets[id]||(s.sets[id]=[]);
+ for(let i=0;i<effectiveSets(e,s.mode);i++)if(!current[i]?.done&&source[i])current[i]={kg:source[i].kg,reps:source[i].reps,rir:null,done:false};
+ if(!save()){s.sets=old;return}renderRunner();toast('Прошлые значения подставлены. Оцени запас повторов заново.');
+}
+function swapControls(){
+ const s=state.active;if(!s||D.plans[s.plan]?.kind!=='strength')return '';
+ const slot=sessionSlots(s)[s.index],options=D.alternatives[slot]||[],id=sessionExerciseIds(s)[s.index];
+ if(!options.length)return '';
+ return `<details class="swap-panel"><summary>Тренажёр занят? Выбрать замену</summary><p>Замена действует в этой тренировке. История и веса каждого варианта ведутся отдельно. При боли останови упражнение, а не подбирай замену через боль.</p><div class="swap-options">${[slot,...options].map(v=>`<button class="button ${id===v?'primary':'dark'}" ${id===v?'disabled':''} onclick="App.chooseAlternative('${v}')">${esc(D.exercises[v].name)} ${id===v?'✓':''}</button>`).join('')}</div></details>`;
+}
+function chooseAlternative(id){
+ const s=state.active;if(!s)return;const slot=sessionSlots(s)[s.index],current=sessionExerciseIds(s)[s.index];
+ if(![slot,...(D.alternatives[slot]||[])].includes(id)||id===current)return;
+ if(s.sets[current]?.some(x=>x.done)){toast('Есть завершённые подходы: сохрани их в исходном упражнении. Замена доступна до первого подхода.');return}
+ if(s.sets[current]?.some(x=>x.kg!==null||x.reps!==null)&&!confirm('Заменить упражнение? Незавершённые значения этого упражнения будут очищены.'))return;
+ const oldSets=JSON.parse(JSON.stringify(s.sets)),oldSwaps={...(s.swaps||{})};s.swaps||={};
+ if(id===slot)delete s.swaps[slot];else s.swaps[slot]=id;
+ delete s.sets[current];
+ if(!save()){s.sets=oldSets;s.swaps=oldSwaps;return}skipRest();renderRunner();toast('Вариант заменён. Рабочий вес подбери отдельно.');
+}
+function changeRest(seconds){
+ const s=state.active;if(!s?.restUntil)return;
+ s.restUntil=Math.max(Date.now(),s.restUntil)+clamp(numeric(seconds),0,120)*1000;
+ if(!save())return;updateRestTimer();
+}
+function loadStats(from,to){
+ const histories=state.history.filter(h=>h.date>=from&&h.date<=to),groups={},days={},rir=[];let strengthSets=0;
+ for(const h of histories)if(D.plans[h.plan]?.kind==='strength'){
+  for(const [id,rows]of Object.entries(h.sets||{})){
+   const ex=D.exercises[id];if(!ex)continue;
+   for(const row of rows)if(row.done&&row.reps>0){strengthSets++;groups[ex.group]=(groups[ex.group]||0)+1;days[h.date]=(days[h.date]||0)+1;if(row.rir!==null&&row.rir!==undefined)rir.push(row.rir)}
+  }
+ }
+ return {histories,groups,days,strengthSets,footballDays:new Set(histories.filter(h=>h.plan==='football'&&h.sets?.game?.some(x=>x.done)).map(h=>h.date)).size,rir:rir.length?rir.reduce((a,b)=>a+b,0)/rir.length:null,rirCount:rir.length};
+}
+function renderLoad(){
+ const today=dateKey(),start=weekStart(),previous=plusDays(start,-7),priorTo=plusDays(today,-7),current=loadStats(start,today),prior=loadStats(previous,priorTo);
+ const change=current.strengthSets-prior.strengthSets,range=[0,1,2,3,4,5,6].map(i=>plusDays(start,i)),max=Math.max(1,...Object.values(current.days));
+ const groups=['Грудь','Спина','Плечи','Ноги','Руки','Пресс'];
+ const history=state.history.filter(h=>h.date<=today).slice().sort((a,b)=>b.date.localeCompare(a.date)||(b.finishedAt||0)-(a.finishedAt||0)).slice(0,30);
+ $('main').innerHTML=`<button class="button icon" onclick="App.go('progress')">← К форме</button>${header('Нагрузка и журнал','BODYDREAM 4.4 · РЕАЛЬНЫЕ ЗАПИСИ')}
+ <div class="load-hero"><span class="overline">${esc(formatDate(start))} — ${esc(formatDate(today))}</span><h2>Твоя неделя в движении</h2><div class="grid2"><div><strong>${current.strengthSets}</strong><span>силовых подходов</span></div><div><strong>${current.footballDays}</strong><span>дней с футболом</span></div></div><div class="load-comparison">${change>0?'+':''}${change} подходов к тем же дням прошлой недели <span>Было ${prior.strengthSets} · ${esc(formatDate(previous))} — ${esc(formatDate(priorTo))}</span></div></div>
+ <div class="section-head"><h3>Силовые по дням</h3></div><div class="card"><div class="load-bars">${range.map(d=>`<div class="load-day ${d>today?'future':''}"><b>${d>today?'—':current.days[d]||0}</b><div class="load-bar-space"><span style="height:${(current.days[d]||0)/max*100}%"></span></div><small>${D.days[dow(d)]}</small></div>`).join('')}</div><p class="small muted">Число отмеченных силовых подходов. Футбольные этапы сюда не входят.</p></div>
+ <div class="section-head"><h3>Куда пришлась нагрузка</h3></div><div class="card">${groups.map(g=>`<div class="muscle-row"><span>${g}</span><div class="xp-track"><span style="width:${Math.min(100,(current.groups[g]||0)/Math.max(1,...Object.values(current.groups))*100)}%"></span></div><b>${current.groups[g]||0}</b></div>`).join('')}<p class="small muted">Каждый подход относится к одной основной группе из карточки упражнения. Косвенная работа мышц не добавляется. Это учёт записей, а не оценка восстановления.</p></div>
+ <div class="card soft"><h3>Запас повторов RIR</h3><div class="rir-value">${current.rir===null?'—':fmt(current.rir)}<span>среднее по ${current.rirCount} подходам</span></div><div class="sub">RIR = сколько чистых повторений ещё осталось бы. Значение рассчитывается только по заполненным полям, пропуски не заменяются нулями.</div></div>
+ <div class="section-head"><h3>Журнал тренировок</h3><span class="small muted">последние 30</span></div>
+ ${history.length?history.map(h=>{const ids=sessionExerciseIds(h),count=Object.values(h.sets||{}).flat().filter(x=>x.done&&x.reps>0).length;return `<details class="card history-detail"><summary><span><strong>${esc(D.plans[h.plan].short)} ${h.format==='express'?'· Короткая':''}</strong><small>${esc(formatDate(h.date))} · ${count} ${h.plan==='football'?'этапов':'подходов'} · сложность ${h.rating}/5</small></span><span>＋</span></summary>${h.pain!=='none'?'<div class="tip amber">В этой тренировке отмечена боль.</div>':''}${ids.map(id=>{const rows=(h.sets[id]||[]).filter(x=>x.done&&x.reps>0);return rows.length?`<div class="history-exercise"><b>${esc(D.exercises[id].name)}</b><span>${rows.map(x=>h.plan==='football'?'✓ Этап выполнен':`${x.kg===null?'—':fmt(x.kg)} кг × ${x.reps} · RIR ${x.rir??'—'}`).join('<br>')}</span></div>`:''}).join('')}${h.note?`<p class="small muted">${esc(h.note)}</p>`:''}</details>`}).join(''):'<div class="card muted">После первой сохранённой тренировки здесь появится подробный журнал.</div>'}
+ <details class="card"><summary>Как работают подсказки нагрузки</summary><p class="small muted">Автоприбавка предлагается только для того же упражнения, после двух полных обычных тренировок в разные дни с одинаковым весом, верхней границей повторов, указанным RIR ≥ 2 и без отметок боли. Шаг больше 10% не предлагается. Облегчённый день блокирует прибавку. Это консервативные правила приложения, а не проверка техники или медицинская оценка.</p><p class="small muted">Общий принцип постепенной и индивидуальной нагрузки: ACSM, 2026, DOI 10.1249/MSS.0000000000003897. Конкретные пороги двух занятий и 10% — настройки приложения. Разбор новых вариантов: библиотека упражнений NASM. Никаких максимальных проб на 1 повтор приложение не требует.</p></details>`;
+}
+
 function makeIcon(id){return D.plans[id]?.icon||'⏱'}
 function nav(pageId){document.querySelectorAll('.nav-btn').forEach(x=>x.classList.toggle('active',x.dataset.page===pageId));}
 function go(which,arg){
   if(videoURL&&(which!=='exercise'||arg!==detailId)){URL.revokeObjectURL(videoURL);videoURL=null}
-  page=which;detailId=arg||null;state.lastPage=which;save();nav(['home','plan','tech','progress','food','settings','journey'].includes(which)?which:(which==='diagnostics'?'settings':'tech'));
-  if(which==='home')renderHome();else if(which==='plan')renderPlan();else if(which==='tech')renderTech();else if(which==='exercise')renderExercise(arg);else if(which==='checkin')renderCheckin();else if(which==='progress')renderProgress();else if(which==='food')renderFood();else if(which==='journey')renderJourney();else if(which==='settings')renderSettings();else if(which==='diagnostics')renderDiagnostics();else renderHome();
+  page=which;detailId=arg||null;state.lastPage=which;save();nav(['home','plan','tech','progress','food','settings','journey'].includes(which)?which:(which==='diagnostics'?'settings':which==='load'?'progress':'tech'));
+  if(which==='home')renderHome();else if(which==='plan')renderPlan();else if(which==='tech')renderTech();else if(which==='exercise')renderExercise(arg);else if(which==='checkin')renderCheckin();else if(which==='progress')renderProgress();else if(which==='food')renderFood();else if(which==='load')renderLoad();else if(which==='journey')renderJourney();else if(which==='settings')renderSettings();else if(which==='diagnostics')renderDiagnostics();else renderHome();
   window.scrollTo({top:0,behavior:'instant'});
 }
 function showRunner(){const el=$('runner');el.hidden=false;document.body.style.overflow='hidden';try{Android?.keepAwake?.(true)}catch(e){}renderRunner();}
@@ -301,7 +381,7 @@ function personalRecords(j){
 function renderJourney(){
  const j=journeyStats(),quests=weeklyQuests(j),badges=journeyBadges(j),today=dateKey(),start=plusDays(today,-27),records=personalRecords(j);
  const finish=lastCelebration;lastCelebration=null;
- $('main').innerHTML=`${header('Твой маршрут','BODYDREAM 4.3 · В СВОЁМ РИТМЕ')}
+ $('main').innerHTML=`${header('Твой маршрут','BODYDREAM 4.4 · В СВОЁМ РИТМЕ')}
  ${finish?`<div class="finish-card" role="status"><span class="finish-star">✦</span><div class="overline">Тренировка сохранена</div><h2>Ещё один шаг сделан</h2><p>${finish.sets} отмеченных подходов · +${finish.xp} XP</p>${finish.badges.length?`<div class="tag">Новое достижение: ${finish.badges.map(esc).join(', ')}</div>`:''}<div class="sub">${finish.xp?'Прогресс уже учтён в твоём маршруте.':'Баллы за этот день уже учтены, либо пока недостаточно отмеченных рабочих подходов.'}</div></div>`:''}
  <div class="journey-hero"><div class="row"><div class="level-ring" style="--progress:${j.inside/3}%" role="img" aria-label="Уровень ${j.level}, ${j.inside} из 300 XP"><div><strong>${j.level}</strong><span>УРОВЕНЬ</span></div></div><div class="grow"><div class="overline">${levelTitle(j.level)}</div><h2>Регулярность<br>становится силой</h2><div class="sub">${j.xp} XP всего · ${300-j.inside} до следующего уровня</div></div></div><div class="journey-numbers"><div><strong>${j.dates.size}</strong><span>дней активности</span></div><div><strong>${j.streak}</strong><span>недель подряд*</span></div><div><strong>${badges.filter(b=>b.done).length}/6</strong><span>достижений</span></div></div></div>
  <div class="section-head"><h3>Небольшие цели недели</h3><span class="tag">${quests.filter(q=>q.value>=q.target).length}/4</span></div>
@@ -322,14 +402,14 @@ function renderHome(){
  <div class="card ${r?.mode==='stop'?'bad':r?.mode==='light'?'warn':'soft'}"><div class="readiness"><div class="readiness-score ${r?.mode==='normal'?'ok':r?.mode==='light'?'medium':r?.mode==='stop'?'stop':''}">${r?r.score:'?'}</div><div><b>${r?modeLabel(r.mode):'Как сегодня себя чувствуешь?'}</b><div class="sub">${esc(readinessText(r))}</div></div></div></div>
  <div class="section-head"><h3>Твоя неделя</h3><span class="muted small">3 зала + ${state.settings.footballWednesday?3:2} футбола</span></div>${weekStrip()}
  <div class="section-head"><h3>Совет тренера</h3><span class="kicker">по твоим данным</span></div><div class="card"><div class="row"><div class="workout-avatar">✦</div><div class="grow"><div class="small">${esc(homeAdvice())}</div></div></div></div>
- ${weeklyReview()}<div class="section-head"><h3>Следующий шаг</h3></div><div class="card"><div class="row"><div class="grow"><b>Техника + прогресс</b><div class="sub">Открывай упражнение, смотри схему и отмечай каждый рабочий подход. Тренер учтёт результат на следующем занятии.</div></div><button class="button icon" onclick="App.go('tech')">→</button></div></div>`;
+ ${weeklyReview()}<button class="load-link" onclick="App.go('load')"><span>◫</span><span class="grow"><strong>Моя нагрузка</strong><small>Силовые подходы и футбол за неделю</small></span>↗</button><div class="section-head"><h3>Следующий шаг</h3></div><div class="card"><div class="row"><div class="grow"><b>Техника + прогресс</b><div class="sub">Открывай упражнение, смотри схему и отмечай каждый рабочий подход. Тренер учтёт результат на следующем занятии.</div></div><button class="button icon" onclick="App.go('tech')">→</button></div></div>`;
 }
 function showDay(day){const id=planOn(day);if(id)openPlan(id);else toast('В этот день восстановление: прогулка и сон.')}
 function openPlan(id){if(!D.plans[id])return;page='plan';detailId=id;nav('plan');renderPlan(id);window.scrollTo(0,0)}
 function renderPlan(selected){
  const plans=selected?[D.plans[selected]]:Object.values(D.plans);
  $('main').innerHTML=`${header(selected?esc(D.plans[selected].title):'План тренировок', 'ТВОЯ НЕДЕЛЯ • АДАПТИВНАЯ НАГРУЗКА')}${selected?`<button class="button icon" onclick="App.go('plan')" style="margin-bottom:12px">← Все тренировки</button>`:''}<div class="card soft"><b>Тренируйся с запасом</b><div class="sub">Первый месяц — 2–3 повтора в запасе. Качество движения важнее количества дисков. Суббота — умеренная нагрузка на ноги перед воскресным футболом.</div></div>${weekStrip()}<div class="section-head"><h3>${selected?'Упражнения':'Тренировки по программе'}</h3></div>
- ${plans.map(plan=>`<div class="card"><div class="row"><div class="workout-avatar">${plan.icon}</div><div class="grow"><b>${esc(plan.title)}</b><div class="sub">${esc(plan.sub)} · ${plan.duration} мин · ${plan.ids.length} этапов</div><div class="meta"><span class="tag">${plan.short}</span><span class="tag blue">${plan.time}</span></div></div></div><div class="divider"></div>${plan.ids.map((id,i)=>{const e=D.exercises[id];return `<div class="row exercise-mini list-item" onclick="App.go('exercise','${id}')"><div class="sortnum">${i+1}</div><div class="grow"><div class="name">${esc(e.name)}</div><div class="meta-line">${e.sets} × ${e.reps} · ${esc(e.group)}</div></div><span class="muted">›</span></div>`}).join('')}<div class="actions" style="margin-top:14px"><button class="button primary" onclick="App.startWorkout('${plan.id}')">▶ Начать ${plan.short}</button>${selected?'':`<button class="button dark" onclick="App.openPlan('${plan.id}')">Подробнее →</button>`}</div></div>`).join('')}
+ ${plans.map(plan=>`<div class="card"><div class="row"><div class="workout-avatar">${plan.icon}</div><div class="grow"><b>${esc(plan.title)}</b><div class="sub">${esc(plan.sub)} · ${plan.duration} мин · ${plan.ids.length} этапов</div><div class="meta"><span class="tag">${plan.short}</span><span class="tag blue">${plan.time}</span></div></div></div><div class="divider"></div>${plan.ids.map((id,i)=>{const e=D.exercises[id];return `<div class="row exercise-mini list-item" onclick="App.go('exercise','${id}')"><div class="sortnum">${i+1}</div><div class="grow"><div class="name">${esc(e.name)}</div><div class="meta-line">${e.sets} × ${e.reps} · ${esc(e.group)}</div></div><span class="muted">›</span></div>`}).join('')}<div class="actions" style="margin-top:14px"><button class="button primary" onclick="App.startWorkout('${plan.id}')">▶ Полная ${plan.short}</button>${plan.kind==='strength'?`<button class="button dark" onclick="App.startWorkout('${plan.id}','express')">◷ Короткая · 3 упражнения</button>`:''}${selected?'':`<button class="button dark" onclick="App.openPlan('${plan.id}')">Подробнее →</button>`}</div></div>`).join('')}
  <div class="tip amber">График по Кемеровской области (UTC+7). В приложении он справочный; изменения в Google Календарь автоматически не отправляются.</div>`;
 }
 function renderCheckin(){
@@ -356,6 +436,8 @@ function setTechSearch(v){techSearch=String(v).slice(0,100);updateTechLists()}
 function setTechFilter(v){techFilter=v;updateTechLists()}
 // Two deliberately simplified schematic poses. The information in cue cards takes priority over a diagram.
 function poseSvg(pattern){
+ if(pattern==='machinepress')return '<div class="tip">Конструкция грудных тренажёров различается. Настрой сиденье и исходное положение по инструкции своей модели; попроси тренера проверить посадку.</div>';
+
  const stroke='#b8fb68', muted='#6c8e9a';
  const L=(x1,y1,x2,y2,w=7,c=stroke)=>`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${c}" stroke-width="${w}" stroke-linecap="round"/>`;
  const C=(cx,cy,r=15,c=stroke)=>`<circle cx="${cx}" cy="${cy}" r="${r}" stroke="${c}" stroke-width="6" fill="none"/>`;
@@ -399,7 +481,7 @@ function renderExercise(id){const e=D.exercises[id];if(!e){go('tech');return}
  $('main').innerHTML=`<button class="button icon" onclick="App.go('tech')" style="margin-bottom:14px">← Библиотека</button>${header(esc(e.name),esc(e.group).toUpperCase())}<div class="meta" style="margin-bottom:10px"><span class="tag">${esc(e.muscles)}</span><span class="tag blue">${e.sets} × ${esc(e.reps)}</span><span class="tag orange">${e.rest||'без'} сек отдыха</span></div>${poseSvg(e.pattern)}<div class="section-head"><h3>Разбор техники</h3></div>${exerciseCues(e)}<div class="card"><b>Альтернатива</b><div class="sub">${esc(e.alt)} — если основной вариант недоступен или вызывает дискомфорт.</div></div><div class="card soft"><b>Тренер по твоему журналу: ${esc(a.label)}</b><div class="sub">${esc(a.text)}</div></div><div class="section-head"><h3>Видеосамопроверка</h3></div><div class="card"><div class="sub">Запиши короткий подход на телефон и сравни себя с подсказками выше. Видео остаётся только на твоём устройстве; приложение <b>не распознаёт позу автоматически</b>.</div><div class="actions"><button class="button dark" onclick="document.getElementById('videoFile').click()">Открыть видео / камеру</button><input id="videoFile" type="file" accept="video/*" capture="environment" hidden onchange="App.loadSelfVideo(this.files)"></div><div id="selfVideo"></div></div>`;
 }
 function loadSelfVideo(files){if(!files?.length)return;const file=files[0];if(!file.type.startsWith('video/')){toast('Выбери видеофайл');return}if(videoURL){URL.revokeObjectURL(videoURL)}videoURL=URL.createObjectURL(file);let el=$('selfVideo');if(el)el.innerHTML=`<video src="${videoURL}" controls playsinline style="width:100%;max-height:340px;border-radius:12px;margin-top:12px" aria-label="Запись упражнения для самопроверки"></video><div class="tip amber">Смотри: положение суставов, плавность, контроль корпуса, отсутствие боли. Автоматического заключения приложение не делает.</div>`}
-function startWorkout(planId){
+function startWorkout(planId,format='full'){
  if(!D.plans[planId])return;
  if(state.active){
    if(state.active.plan===planId){showRunner();return}
@@ -407,24 +489,24 @@ function startWorkout(planId){
  }
  const r=readinessFor();if(r?.mode==='stop'){toast('Ты отметил резкую боль. Сначала разберись с причиной и не тренируйся через боль.');return}
  if(!r){if(window.confirm('Перед тренировкой желательно оценить сон и самочувствие. Перейти к чеку готовности?')){go('checkin');return}}
- state.active={id:Date.now().toString(36),date:dateKey(),plan:planId,mode:r?.mode||'normal',index:0,startedAt:Date.now(),sets:{},restUntil:null};if(!save()){state.active=null;return}showRunner();speak('Тренировка началась. Качество движений важнее веса.');
+ state.active={id:Date.now().toString(36),date:dateKey(),plan:planId,mode:r?.mode||'normal',index:0,startedAt:Date.now(),sets:{},restUntil:null,format:format==='express'&&D.express[planId]?'express':'full',swaps:{}};if(!save()){state.active=null;return}showRunner();speak('Тренировка началась. Качество движений важнее веса.');
 }
 function resumeWorkout(){if(!state.active){toast('Нет незавершённой тренировки');return}if(readinessFor()?.mode==='stop'){toast('Ты отметил резкую боль. Приоритет — безопасность, не продолжай нагрузку.');return}showRunner()}
 function pauseWorkout(){if(!state.active){hideRunner();return}save();hideRunner();toast('Тренировка сохранена, можно продолжить позже')}
 function discardWorkout(){if(!state.active)return;if(confirm('Удалить незавершённую тренировку? Записанные подходы этой сессии будут потеряны.')){state.active=null;save();hideRunner();toast('Черновик тренировки удалён')}}
-function activeExercise(){if(!state.active)return null;const p=D.plans[state.active.plan];return p?D.exercises[p.ids[state.active.index]]:null}
+function activeExercise(){return state.active?D.exercises[sessionExerciseIds(state.active)[state.active.index]]:null}
 function setRows(e,id){
  const s=state.active;const rows=s.sets[id]||[],n=effectiveSets(e,s.mode),last=suggestion(id);
  return `<div class="card"><div class="spaced"><h3>Рабочие подходы</h3><span class="tag blue">${n} × ${esc(e.reps)}</span></div><div class="sub" style="margin:7px 0 13px">RIR — сколько повторов осталось бы в запасе. Ориентир: 2, в облегчённый день — 3.</div><div class="set-grid"><div class="head">№</div><div class="head">Вес, кг</div><div class="head">Повторы*</div><div class="head">RIR</div><div class="head">✓</div>${Array.from({length:n},(_,i)=>{
-    const x=rows[i]||{};return `<div class="setnum">${i+1}</div><input class="input" type="number" inputmode="decimal" min="0" max="500" step="0.5" value="${x.kg??(i===0?last.weight??'':rows[0]?.kg??last.weight??'')}" aria-label="Вес подхода ${i+1}" onchange="App.editSet('${id}',${i},'kg',this.value)"><input class="input" type="number" inputmode="numeric" min="1" max="200" step="1" value="${x.reps??''}" aria-label="Повторения подхода ${i+1}" onchange="App.editSet('${id}',${i},'reps',this.value)"><input class="input" type="number" inputmode="numeric" min="0" max="5" step="1" value="${x.rir??(s.mode==='light'?3:2)}" aria-label="RIR подхода ${i+1}" onchange="App.editSet('${id}',${i},'rir',this.value)"><button class="set-done ${x.done?'is-done':''}" aria-label="Завершить подход ${i+1}" onclick="App.markSet('${id}',${i})">${x.done?'✓':'○'}</button>`
+    const x=rows[i]||{};return `<div class="setnum">${i+1}</div><input class="input" type="number" inputmode="decimal" min="0" max="500" step="0.5" value="${x.kg??(i===0?last.weight??'':rows[0]?.kg??last.weight??'')}" aria-label="Вес подхода ${i+1}" onchange="App.editSet('${id}',${i},'kg',this.value)"><input class="input" type="number" inputmode="numeric" min="1" max="200" step="1" value="${x.reps??''}" aria-label="Повторения подхода ${i+1}" onchange="App.editSet('${id}',${i},'reps',this.value)"><input class="input" type="number" inputmode="numeric" min="0" max="5" step="1" value="${x.rir??''}" aria-label="RIR подхода ${i+1}" onchange="App.editSet('${id}',${i},'rir',this.value)"><button class="set-done ${x.done?'is-done':''}" aria-label="Завершить подход ${i+1}" onclick="App.markSet('${id}',${i})">${x.done?'✓':'○'}</button>`
  }).join('')}</div><div class="load-note" style="margin-top:10px">*Для упражнения на время вводи секунды. Для упражнений без отягощения можно поставить вес 0. Вес гантелей — одной гантели.</div></div>`;
 }
 function trainerHintFor(id){const a=suggestion(id);return `<div class="tip ${a.kind==='warn'?'amber':''}"><b>${esc(a.label)}.</b> ${esc(a.text)}</div>`}
 function renderRunner(){
- const s=state.active;if(!s){hideRunner();return}const p=D.plans[s.plan],id=p.ids[s.index],e=D.exercises[id],fb=p.kind==='football';
+ const s=state.active;if(!s){hideRunner();return}const p=D.plans[s.plan],ids=sessionExerciseIds(s),id=ids[s.index],e=D.exercises[id],fb=p.kind==='football';
  const n=effectiveSets(e,s.mode),done=Object.values(s.sets).flat().filter(x=>x.done).length;
  let desc=s.mode==='light'?'Сегодня облегчённый режим: меньше подходов, 2–3 повтора в запасе.':s.mode==='normal'?'Рабочий режим: оставляй примерно 2 чистых повтора в запасе.':'Пересмотри нагрузку.';
- $('runnerContent').innerHTML=`<div class="runner-header"><div class="spaced"><button class="button icon" onclick="App.pauseWorkout()">← Пауза</button><div class="stepdots">${p.ids.map((_,i)=>`<i class="${i<=s.index?'active':''}"></i>`).join('')}</div><span class="tag muted">${s.index+1}/${p.ids.length}</span></div></div><div class="runner-wrap"><div class="kicker">${esc(p.short)} · ${esc(p.title)}</div><h1 style="margin:9px 0 6px">${esc(e.name)}</h1><div class="meta"><span class="tag">${esc(e.group)}</span><span class="tag blue">${n} × ${esc(e.reps)}</span><span class="tag orange">${esc(modeLabel(s.mode))}</span></div><div id="timerSlot"></div>${poseSvg(e.pattern)}<div class="section-head"><h3>Как выполнять</h3></div>${exerciseCues(e)}${fb?`<div class="card"><b>Этап ${s.index+1} из ${p.ids.length}</b><div class="sub">${esc(e.reps)} · ${esc(e.muscles)}</div><button class="button primary wide" style="margin-top:14px" onclick="App.markStage('${id}')">✓ Этап выполнен</button></div>`:setRows(e,id)}${fb?'':trainerHintFor(id)}<div class="actions" style="margin-top:13px"><button class="button dark" onclick="App.runnerPrev()" ${s.index===0?'disabled':''}>← Назад</button><button class="button primary" onclick="App.runnerNext()">${s.index===p.ids.length-1?'К завершению →':'Следующее →'}</button></div><div class="tip amber" style="margin-top:15px">${esc(desc)} Если есть суставная боль, необычная одышка или головокружение — прекрати подход.</div></div>`;
+ $('runnerContent').innerHTML=`<div class="runner-header"><div class="spaced"><button class="button icon" onclick="App.pauseWorkout()">← Пауза</button><div class="stepdots">${ids.map((_,i)=>`<i class="${i<=s.index?'active':''}"></i>`).join('')}</div><span class="tag muted">${s.index+1}/${ids.length}</span></div></div><div class="runner-wrap"><div class="kicker">${esc(p.short)} · ${esc(p.title)}</div><h1 style="margin:9px 0 6px">${esc(e.name)}</h1><div class="meta"><span class="tag">${esc(e.group)}</span><span class="tag blue">${n} × ${esc(e.reps)}</span><span class="tag orange">${esc(modeLabel(s.mode))}</span>${s.format==='express'?'<span class="tag blue">Короткая</span>':''}</div><div id="timerSlot"></div>${poseSvg(e.pattern)}<div class="section-head"><h3>Как выполнять</h3></div>${exerciseCues(e)}${fb?`<div class="card"><b>Этап ${s.index+1} из ${p.ids.length}</b><div class="sub">${esc(e.reps)} · ${esc(e.muscles)}</div><button class="button primary wide" style="margin-top:14px" onclick="App.markStage('${id}')">✓ Этап выполнен</button></div>`:setRows(e,id)}${fb?'':previousExerciseCard(id)+swapControls()+trainerHintFor(id)}<div class="actions" style="margin-top:13px"><button class="button dark" onclick="App.runnerPrev()" ${s.index===0?'disabled':''}>← Назад</button><button class="button primary" onclick="App.runnerNext()">${s.index===ids.length-1?'К завершению →':'Следующее →'}</button></div><div class="tip amber" style="margin-top:15px">${esc(desc)} Если есть суставная боль, необычная одышка или головокружение — прекрати подход.</div></div>`;
  updateRestTimer();
 }
 function editSet(exId,i,field,value){if(!state.active)return;const ex=D.exercises[exId],sets=state.active.sets[exId]||(state.active.sets[exId]=[]);let x=sets[i]||(sets[i]={});if(field==='kg')x.kg=value===''?null:clamp(numeric(value),0,500);if(field==='reps')x.reps=value===''?null:clamp(numeric(value),0,200);if(field==='rir')x.rir=value===''?null:clamp(numeric(value),0,5);save()}
@@ -443,9 +525,9 @@ function markSet(exId,i){const s=state.active;if(!s)return;const ex=D.exercises[
 }
 function markStage(exId){if(!state.active)return;const old=state.active.sets[exId];state.active.sets[exId]=[{kg:0,reps:1,rir:null,done:true}];if(!save()){if(old===undefined)delete state.active.sets[exId];else state.active.sets[exId]=old;return}vibrate();runnerNext()}
 function runnerPrev(){if(state.active&&state.active.index>0){state.active.index--;save();renderRunner()}}
-function runnerNext(){if(!state.active)return;const s=state.active,p=D.plans[s.plan],id=p.ids[s.index],e=D.exercises[id];const n=s.sets[id]?.filter(x=>x.done).length||0;
+function runnerNext(){if(!state.active)return;const s=state.active,p=D.plans[s.plan],ids=sessionExerciseIds(s),id=ids[s.index],e=D.exercises[id];const n=s.sets[id]?.filter(x=>x.done).length||0;
  if(n===0&&!confirm(`Для «${e.name}» нет выполненных подходов. Пропустить этот этап?`))return;
- if(s.index<p.ids.length-1){s.index++;save();renderRunner();return}
+ if(s.index<ids.length-1){s.index++;save();renderRunner();return}
  renderFinish();
 }
 function startRest(seconds){if(!state.active||!seconds)return;state.active.restUntil=Date.now()+seconds*1000;save();clearInterval(timerHandle);timerHandle=setInterval(updateRestTimer,250)}
@@ -455,7 +537,7 @@ function updateRestTimer(){const t=$('timerSlot'),s=state.active;if(!t||!s)retur
  const left=Math.max(0,Math.ceil((s.restUntil-Date.now())/1000));
  if(left===0){s.restUntil=null;save();clearInterval(timerHandle);timerHandle=0;t.innerHTML=`<div class="timer-strip"><strong class="lime">✓</strong><div class="grow"><b>Отдых окончен</b><div class="sub">Можно переходить к следующему подходу</div></div></div>`;vibrate(160);speak('Отдых окончен. Готов к следующему подходу.');return}
  const clock=`${String(Math.floor(left/60)).padStart(2,'0')}:${String(left%60).padStart(2,'0')}`;
- t.innerHTML=`<div class="timer-strip"><strong>${clock}</strong><div class="grow"><b>Отдых</b><div class="sub">Восстанови дыхание. Можно пропустить.</div></div><button class="button icon" onclick="App.skipRest()">Готов</button></div>`;
+ t.innerHTML=`<div class="timer-strip"><strong>${clock}</strong><div class="grow"><b>Отдых</b><div class="sub">Восстанови дыхание. Можно пропустить.</div></div><div class="rest-actions"><button class="button icon" onclick="App.changeRest(30)">+30 с</button><button class="button icon" onclick="App.skipRest()">Готов</button></div></div>`;
  if(!timerHandle)timerHandle=setInterval(updateRestTimer,250);
 }
 function renderFinish(){const s=state.active;if(!s)return;const p=D.plans[s.plan],num=Object.values(s.sets).flat().filter(x=>x.done).length;
@@ -485,7 +567,7 @@ function bodyAnalysis(){const dat=trendData();if(dat.length<2)return 'Набир
 }
 function renderProgress(){
  const weight=currentWeight(),waist=latestWaist(),done=state.history.length,diff=state.profile.startWeight-weight;
- $('main').innerHTML=`${header('Твоя форма','НЕ ДОГАДКИ · ИЗМЕРЕНИЯ · ДИНАМИКА')}<div class="grid2"><div class="metric"><small>Вес сейчас</small><div class="num">${fmt(weight)}<span class="unit">кг</span></div><b>${diff>=0?'−':''}${fmt(Math.abs(diff))} кг от старта</b></div><div class="metric"><small>Талия сейчас</small><div class="num">${waist?fmt(waist):'—'}<span class="unit">см</span></div><b>Замер в одинаковых условиях</b></div><div class="metric"><small>Тренировки</small><div class="num">${done}</div><b>Сохранено за всё время</b></div><div class="metric"><small>Средняя нагрузка</small><div class="num">${done?fmt(state.history.reduce((n,h)=>n+Object.values(h.sets||{}).flat().filter(x=>x.done).length,0)/done):'—'}</div><b>Подходов за тренировку</b></div></div><div class="section-head"><h3>Добавить измерение</h3><span class="muted small">лучше утром</span></div><div class="card"><div class="form-grid"><div class="field-box"><label class="field" for="bmDate">Дата</label><input class="input" id="bmDate" type="date" value="${dateKey()}"></div><div class="field-box"><label class="field" for="bmWeight">Вес, кг</label><input class="input" id="bmWeight" type="number" min="35" max="250" step="0.1" placeholder="${fmt(weight)}"></div><div class="field-box"><label class="field" for="bmWaist">Талия, см</label><input class="input" id="bmWaist" type="number" min="40" max="200" step="0.1" placeholder="например 92"></div></div><button class="button primary wide" style="margin-top:9px" onclick="App.addMeasurement()">Записать измерение</button></div><div class="section-head"><h3>График изменений</h3></div><div class="filter-scroll"><button class="filter-chip ${progressMetric==='weight'?'active':''}" onclick="App.switchMetric('weight')">Вес</button><button class="filter-chip ${progressMetric==='waist'?'active':''}" onclick="App.switchMetric('waist')">Талия</button></div><div class="card">${graph(progressMetric)}</div><div class="tip">${esc(bodyAnalysis())}</div><div class="section-head"><h3>Фото прогресса</h3><span class="muted small">только на устройстве</span></div><div class="card"><p class="muted small">Фото хранятся локально, не загружаются в облако. До 10 снимков. Снимай при одинаковом освещении и ракурсе.</p><input type="file" id="photoFile" accept="image/*" style="display:none" onchange="App.addPhoto(this.files)"><button class="button dark" onclick="document.getElementById('photoFile').click()">＋ Добавить фото</button>${state.photos.length?`<div class="photo-grid" style="margin-top:13px">${state.photos.slice().reverse().map(x=>`<div class="photo-item"><img src="${x.data}" alt="Фото прогресса ${esc(x.date)}"><b>${esc(x.date)}</b><button class="button icon" style="width:100%" onclick="App.deletePhoto('${x.id}')">Удалить</button></div>`).join('')}</div>`:''}</div><div class="section-head"><h3>Последние тренировки</h3></div>${state.history.length?state.history.slice().reverse().slice(0,8).map(h=>{const p=D.plans[h.plan],num=Object.values(h.sets||{}).flat().filter(x=>x.done).length;return `<div class="list-item"><div class="spaced"><div><b>${esc(p?.title||h.plan)}</b><div class="sub">${esc(h.date)} · ${num} подходов · сложность ${h.rating}/5</div></div><span class="tag ${h.pain==='none'?'':'orange'}">${h.pain==='none'?'✓ Без боли':'Боль'}</span></div></div>`}).join(''):`<div class="card muted small">После первой тренировки здесь появится журнал.</div>`}`;
+ $('main').innerHTML=`${header('Твоя форма','НЕ ДОГАДКИ · ИЗМЕРЕНИЯ · ДИНАМИКА')}<button class="load-link" onclick="App.go('load')"><span>◫</span><span class="grow"><strong>Нагрузка и журнал</strong><small>Подходы, группы мышц, сравнение недель</small></span>↗</button><div class="grid2"><div class="metric"><small>Вес сейчас</small><div class="num">${fmt(weight)}<span class="unit">кг</span></div><b>${diff>=0?'−':''}${fmt(Math.abs(diff))} кг от старта</b></div><div class="metric"><small>Талия сейчас</small><div class="num">${waist?fmt(waist):'—'}<span class="unit">см</span></div><b>Замер в одинаковых условиях</b></div><div class="metric"><small>Тренировки</small><div class="num">${done}</div><b>Сохранено за всё время</b></div><div class="metric"><small>Средняя нагрузка</small><div class="num">${done?fmt(state.history.reduce((n,h)=>n+Object.values(h.sets||{}).flat().filter(x=>x.done).length,0)/done):'—'}</div><b>Подходов за тренировку</b></div></div><div class="section-head"><h3>Добавить измерение</h3><span class="muted small">лучше утром</span></div><div class="card"><div class="form-grid"><div class="field-box"><label class="field" for="bmDate">Дата</label><input class="input" id="bmDate" type="date" value="${dateKey()}"></div><div class="field-box"><label class="field" for="bmWeight">Вес, кг</label><input class="input" id="bmWeight" type="number" min="35" max="250" step="0.1" placeholder="${fmt(weight)}"></div><div class="field-box"><label class="field" for="bmWaist">Талия, см</label><input class="input" id="bmWaist" type="number" min="40" max="200" step="0.1" placeholder="например 92"></div></div><button class="button primary wide" style="margin-top:9px" onclick="App.addMeasurement()">Записать измерение</button></div><div class="section-head"><h3>График изменений</h3></div><div class="filter-scroll"><button class="filter-chip ${progressMetric==='weight'?'active':''}" onclick="App.switchMetric('weight')">Вес</button><button class="filter-chip ${progressMetric==='waist'?'active':''}" onclick="App.switchMetric('waist')">Талия</button></div><div class="card">${graph(progressMetric)}</div><div class="tip">${esc(bodyAnalysis())}</div><div class="section-head"><h3>Фото прогресса</h3><span class="muted small">только на устройстве</span></div><div class="card"><p class="muted small">Фото хранятся локально, не загружаются в облако. До 10 снимков. Снимай при одинаковом освещении и ракурсе.</p><input type="file" id="photoFile" accept="image/*" style="display:none" onchange="App.addPhoto(this.files)"><button class="button dark" onclick="document.getElementById('photoFile').click()">＋ Добавить фото</button>${state.photos.length?`<div class="photo-grid" style="margin-top:13px">${state.photos.slice().reverse().map(x=>`<div class="photo-item"><img src="${x.data}" alt="Фото прогресса ${esc(x.date)}"><b>${esc(x.date)}</b><button class="button icon" style="width:100%" onclick="App.deletePhoto('${x.id}')">Удалить</button></div>`).join('')}</div>`:''}</div><div class="section-head"><h3>Последние тренировки</h3></div>${state.history.length?state.history.slice().reverse().slice(0,8).map(h=>{const p=D.plans[h.plan],num=Object.values(h.sets||{}).flat().filter(x=>x.done).length;return `<div class="list-item"><div class="spaced"><div><b>${esc(p?.title||h.plan)}</b><div class="sub">${esc(h.date)} · ${num} подходов · сложность ${h.rating}/5</div></div><span class="tag ${h.pain==='none'?'':'orange'}">${h.pain==='none'?'✓ Без боли':'Боль'}</span></div></div>`}).join(''):`<div class="card muted small">После первой тренировки здесь появится журнал.</div>`}`;
 }
 function addMeasurement(){const date=$('bmDate')?.value||dateKey(),weight=numeric($('bmWeight')?.value),waist=numeric($('bmWaist')?.value),valid=/^\d{4}-\d{2}-\d{2}$/.test(date)&&date<='2100-01-01';
  if(!valid||weight<35||weight>250){toast('Укажи дату и реалистичный вес от 35 до 250 кг');return}if(waist&&(waist<40||waist>200)){toast('Проверь размер талии');return}
@@ -514,7 +596,7 @@ function diagnosticText(){
  try{localStorage.setItem(key,'1');if(localStorage.getItem(key)!=='1')throw Error('read error');localStorage.removeItem(key)}catch(e){storage='Недоступно: '+String(e.message||e).slice(0,100)}
  const bridge=!!window.Android?.exportData;
  const rows=[
-  'BodyDream Coach 4.3 / Redmi Note 13 Pro',
+  'BodyDream Coach 4.4 / Redmi Note 13 Pro',
   'Режим: '+(bridge?'Android APK / WebView':'браузерная демоверсия'),
   'Сохранение данных: '+storage,
   'Часовой пояс меню: '+ZONE,
@@ -535,7 +617,7 @@ function renderDiagnostics(){
 }
 
 function renderSettings(){const p=state.profile,s=state.settings;
- $('main').innerHTML=`${header('Настройки и данные','ПОД ТЕБЯ · ТОЛЬКО НА ТЕЛЕФОНЕ')}<div class="card"><h3>Твой профиль</h3><div class="form-grid" style="margin-top:14px"><div class="field-box"><label class="field" for="pfName">Имя</label><input id="pfName" class="input" value="${esc(p.name)}" maxlength="40"></div><div class="field-box"><label class="field" for="pfAge">Возраст</label><input id="pfAge" class="input" type="number" min="18" max="100" value="${p.age}"></div><div class="field-box"><label class="field" for="pfHeight">Рост, см</label><input id="pfHeight" class="input" type="number" min="120" max="230" value="${p.height}"></div><div class="field-box"><label class="field" for="pfStart">Старт, кг</label><input id="pfStart" class="input" type="number" min="35" max="250" step=".1" value="${p.startWeight}"></div><div class="field-box"><label class="field" for="pfTarget">Цель, кг</label><input id="pfTarget" class="input" type="number" min="35" max="250" step=".1" value="${p.targetWeight}"></div><div class="field-box"><label class="field" for="pfCals">Ккал/сутки</label><input id="pfCals" class="input" type="number" min="1200" max="5000" value="${p.calories}"></div><div class="field-box"><label class="field" for="pfProtein">Белок, г</label><input id="pfProtein" class="input" type="number" min="40" max="280" value="${p.protein}"></div></div><button class="button primary wide" onclick="App.saveProfile()">Сохранить профиль</button></div><div class="card"><h3>Тренировка и удобство</h3><div class="row" style="margin:15px 0"><div class="grow"><b>Вибрация</b><div class="sub">Подход завершён, отдых окончен</div></div><input type="checkbox" ${s.vibrate?'checked':''} onchange="App.toggleSetting('vibrate',this.checked)" style="width:22px;height:22px;accent-color:var(--lime)"></div><div class="divider"></div><div class="row" style="margin:15px 0"><div class="grow"><b>Голосовые подсказки</b><div class="sub">Если на телефоне есть русский голос TTS</div></div><input type="checkbox" ${s.voice?'checked':''} onchange="App.toggleSetting('voice',this.checked)" style="width:22px;height:22px;accent-color:var(--lime)"></div><div class="divider"></div><div class="row" style="margin:15px 0"><div class="grow"><b>Футбол по средам</b><div class="sub">Необязательно. Получится 3 футбольных дня (вт/ср/вс) и 3 зала. Повышенная нагрузка — следи за восстановлением.</div></div><input type="checkbox" ${s.footballWednesday?'checked':''} onchange="App.toggleSetting('footballWednesday',this.checked)" style="width:22px;height:22px;accent-color:var(--lime)"></div></div><div class="card soft"><h3>Резервная копия</h3><div class="sub" style="margin:7px 0 12px">Вес, тренировки, фото, питание и настройки сохраняются локально. Чтобы не потерять их при переустановке, скачай JSON-файл. Отправка в облако не происходит.</div><div class="actions"><button class="button primary" onclick="App.exportBackup()">↓ Сохранить JSON</button><button class="button dark" onclick="App.importBackup()">↑ Восстановить</button></div></div>${state.active?`<div class="card warn"><b>Незавершённая тренировка</b><div class="sub">${esc(D.plans[state.active.plan]?.title)}. Черновик хранится до завершения или удаления.</div><div class="actions"><button class="button primary" onclick="App.resumeWorkout()">Продолжить</button><button class="button danger" onclick="App.discardWorkout()">Удалить черновик</button></div></div>`:''}<div class="card"><h3>Проверка на Redmi</h3><div class="sub">При проблемах с установкой, сохранением или отображением можно посмотреть локальный отчёт без отправки данных.</div><button class="button dark wide" style="margin-top:12px" onclick="App.go('diagnostics')">Проверить приложение →</button></div><div class="card"><h3>Как работает персональный тренер</h3><div class="sub" style="margin-top:8px">Это автономные рекомендации по правилам (сон, боль, количество подходов, повторения и RIR). Никакой облачной нейросети и автоматического распознавания техники камерой здесь нет. Форма и питание оцениваются по твоим записям. При медицинских ограничениях проконсультируйся с профильным специалистом.</div><div class="divider"></div><div class="small muted">BodyDream Coach 4.3 • Redmi Note 13 Pro 4G/5G • HyperOS/MIUI • Кузбасс UTC+7 • Офлайн</div></div>`;
+ $('main').innerHTML=`${header('Настройки и данные','ПОД ТЕБЯ · ТОЛЬКО НА ТЕЛЕФОНЕ')}<div class="card"><h3>Твой профиль</h3><div class="form-grid" style="margin-top:14px"><div class="field-box"><label class="field" for="pfName">Имя</label><input id="pfName" class="input" value="${esc(p.name)}" maxlength="40"></div><div class="field-box"><label class="field" for="pfAge">Возраст</label><input id="pfAge" class="input" type="number" min="18" max="100" value="${p.age}"></div><div class="field-box"><label class="field" for="pfHeight">Рост, см</label><input id="pfHeight" class="input" type="number" min="120" max="230" value="${p.height}"></div><div class="field-box"><label class="field" for="pfStart">Старт, кг</label><input id="pfStart" class="input" type="number" min="35" max="250" step=".1" value="${p.startWeight}"></div><div class="field-box"><label class="field" for="pfTarget">Цель, кг</label><input id="pfTarget" class="input" type="number" min="35" max="250" step=".1" value="${p.targetWeight}"></div><div class="field-box"><label class="field" for="pfCals">Ккал/сутки</label><input id="pfCals" class="input" type="number" min="1200" max="5000" value="${p.calories}"></div><div class="field-box"><label class="field" for="pfProtein">Белок, г</label><input id="pfProtein" class="input" type="number" min="40" max="280" value="${p.protein}"></div></div><button class="button primary wide" onclick="App.saveProfile()">Сохранить профиль</button></div><div class="card"><h3>Тренировка и удобство</h3><div class="row" style="margin:15px 0"><div class="grow"><b>Вибрация</b><div class="sub">Подход завершён, отдых окончен</div></div><input type="checkbox" ${s.vibrate?'checked':''} onchange="App.toggleSetting('vibrate',this.checked)" style="width:22px;height:22px;accent-color:var(--lime)"></div><div class="divider"></div><div class="row" style="margin:15px 0"><div class="grow"><b>Голосовые подсказки</b><div class="sub">Если на телефоне есть русский голос TTS</div></div><input type="checkbox" ${s.voice?'checked':''} onchange="App.toggleSetting('voice',this.checked)" style="width:22px;height:22px;accent-color:var(--lime)"></div><div class="divider"></div><div class="row" style="margin:15px 0"><div class="grow"><b>Футбол по средам</b><div class="sub">Необязательно. Получится 3 футбольных дня (вт/ср/вс) и 3 зала. Повышенная нагрузка — следи за восстановлением.</div></div><input type="checkbox" ${s.footballWednesday?'checked':''} onchange="App.toggleSetting('footballWednesday',this.checked)" style="width:22px;height:22px;accent-color:var(--lime)"></div></div><div class="card soft"><h3>Резервная копия</h3><div class="sub" style="margin:7px 0 12px">Вес, тренировки, фото, питание и настройки сохраняются локально. Чтобы не потерять их при переустановке, скачай JSON-файл. Отправка в облако не происходит.</div><div class="actions"><button class="button primary" onclick="App.exportBackup()">↓ Сохранить JSON</button><button class="button dark" onclick="App.importBackup()">↑ Восстановить</button></div></div>${state.active?`<div class="card warn"><b>Незавершённая тренировка</b><div class="sub">${esc(D.plans[state.active.plan]?.title)}. Черновик хранится до завершения или удаления.</div><div class="actions"><button class="button primary" onclick="App.resumeWorkout()">Продолжить</button><button class="button danger" onclick="App.discardWorkout()">Удалить черновик</button></div></div>`:''}<div class="card"><h3>Проверка на Redmi</h3><div class="sub">При проблемах с установкой, сохранением или отображением можно посмотреть локальный отчёт без отправки данных.</div><button class="button dark wide" style="margin-top:12px" onclick="App.go('diagnostics')">Проверить приложение →</button></div><div class="card"><h3>Как работает персональный тренер</h3><div class="sub" style="margin-top:8px">Это автономные рекомендации по правилам (сон, боль, количество подходов, повторения и RIR). Никакой облачной нейросети и автоматического распознавания техники камерой здесь нет. Форма и питание оцениваются по твоим записям. При медицинских ограничениях проконсультируйся с профильным специалистом.</div><div class="divider"></div><div class="small muted">BodyDream Coach 4.4 • Redmi Note 13 Pro 4G/5G • HyperOS/MIUI • Кузбасс UTC+7 • Офлайн</div></div>`;
 }
 function saveProfile(){const fields={name:String($('pfName').value).trim().slice(0,40),age:numeric($('pfAge').value),height:numeric($('pfHeight').value),startWeight:numeric($('pfStart').value),targetWeight:numeric($('pfTarget').value),calories:numeric($('pfCals').value),protein:numeric($('pfProtein').value)};
  if(!fields.name||fields.age<18||fields.age>100||fields.height<120||fields.height>230||fields.startWeight<35||fields.startWeight>250||fields.targetWeight<35||fields.targetWeight>250||fields.calories<1200||fields.calories>5000||fields.protein<40||fields.protein>280){toast('Проверь значения профиля');return}
@@ -561,6 +643,7 @@ function init(){
   go('home');
   if(state.active&&state.active.restUntil&&state.active.restUntil<Date.now()){state.active.restUntil=null;save()}
 }
-window.App={go,openPlan,showDay,saveCheckin,startWorkout,resumeWorkout,pauseWorkout,discardWorkout,renderRunner,editSet,markSet,markStage,runnerPrev,runnerNext,skipRest,setRating,finishWorkout,setTechSearch,setTechFilter,loadSelfVideo,addMeasurement,switchMetric,addPhoto,deletePhoto,foodDay:foodDayPick,foodTab:foodTabPick,toggleMeal,toggleGrocery,resetGroceries,saveProfile,toggleSetting,exportBackup,importBackup,readBackupFile};
+window.App={go,copyPrevious,chooseAlternative,changeRest,openPlan,showDay,saveCheckin,startWorkout,resumeWorkout,pauseWorkout,discardWorkout,renderRunner,editSet,markSet,markStage,runnerPrev,runnerNext,skipRest,setRating,finishWorkout,setTechSearch,setTechFilter,loadSelfVideo,addMeasurement,switchMetric,addPhoto,deletePhoto,foodDay:foodDayPick,foodTab:foodTabPick,toggleMeal,toggleGrocery,resetGroceries,saveProfile,toggleSetting,exportBackup,importBackup,readBackupFile};
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
 })();
+

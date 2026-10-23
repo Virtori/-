@@ -1,4 +1,4 @@
-name: Build BodyDream Coach 4.3 APK
+name: Build BodyDream Coach 4.4 APK
 
 on:
   workflow_dispatch:
@@ -39,6 +39,7 @@ jobs:
         run: |
           node --check app/src/main/assets/data.js
           node --check app/src/main/assets/app.js
+          node tests/coach-rules.cjs
 
       - name: Verify interface, progress and backup compatibility
         env:
@@ -51,35 +52,40 @@ jobs:
           server_pid=$!
           trap 'kill "$server_pid"' EXIT
           curl --retry 10 --retry-connrefused --retry-delay 1 -fsS http://127.0.0.1:8765/ -o /dev/null
-          node tests/verify43.cjs 2>&1 | tee ui-test-output.txt
+          (node tests/verify43.cjs && node tests/verify44.cjs) 2>&1 | tee ui-test-output.txt
 
       - name: Interface review images and test log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: BodyDream-4.3-interface-review
+          name: BodyDream-4.4-interface-review
           path: |
             *43*.png
+            *44*.png
             ui-test-output.txt
           if-no-files-found: ignore
 
-      - name: Build debug APK
+      - name: Build unsigned release APK
         run: |
           set -o pipefail
-          gradle --no-daemon --console=plain :app:assembleDebug --stacktrace 2>&1 | tee build-output.txt
+          gradle --no-daemon --console=plain :app:assembleRelease --stacktrace 2>&1 | tee build-output.txt
 
       - name: Check APK and checksum
         run: |
-          test -s app/build/outputs/apk/debug/app-debug.apk
-          (cd app/build/outputs/apk/debug && sha256sum app-debug.apk > APK-SHA256.txt)
+          test -s app/build/outputs/apk/release/app-release-unsigned.apk
+          (cd app/build/outputs/apk/release && sha256sum app-release-unsigned.apk > APK-SHA256.txt)
+          cp "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" app/build/outputs/apk/release/apksigner.jar
+          cp "$ANDROID_HOME/build-tools/35.0.0/aapt2" app/build/outputs/apk/release/aapt2
 
-      - name: Downloadable APK
+      - name: Unsigned APK for private signing
         uses: actions/upload-artifact@v4
         with:
-          name: BodyDream-Coach-4.3-Redmi-APK
+          name: BodyDream-Coach-4.4-unsigned
           path: |
-            app/build/outputs/apk/debug/app-debug.apk
-            app/build/outputs/apk/debug/APK-SHA256.txt
+            app/build/outputs/apk/release/app-release-unsigned.apk
+            app/build/outputs/apk/release/APK-SHA256.txt
+            app/build/outputs/apk/release/apksigner.jar
+            app/build/outputs/apk/release/aapt2
           if-no-files-found: error
 
       - name: Build log on failure
@@ -89,3 +95,4 @@ jobs:
           name: BodyDream-build-error-log
           path: build-output.txt
           if-no-files-found: ignore
+

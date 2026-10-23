@@ -1,0 +1,34 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
+const assets=path.join(__dirname,'../app/src/main/assets');
+const sandbox={Intl,Date,console,Set,Map,Math,Number,JSON,Object,Array,String,Boolean,URL,setTimeout,clearTimeout,setInterval,clearInterval,
+ localStorage:{getItem:()=>null,setItem:()=>{}},window:{},navigator:{},document:{readyState:'loading',addEventListener:()=>{}}};
+sandbox.window.window=sandbox.window;vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(path.join(assets,'data.js'),'utf8'),sandbox);
+const source=fs.readFileSync(path.join(assets,'app.js'),'utf8').replace("window.App={go,", "window.Test={newState,normalizeState,cleanSession,dateKey,plusDays,suggestion,sessionExerciseIds,loadStats,setState:s=>state=s,getState:()=>state};window.App={go,");
+vm.runInContext(source,sandbox);
+const t=sandbox.window.Test,today=t.dateKey(),day=n=>t.plusDays(today,n);
+const row=(kg=40,reps=10,rir=2)=>({kg,reps,rir,done:true});
+const session=(n,overrides={})=>({id:'s'+n,date:day(n),plan:'push',mode:'normal',format:'full',swaps:{},sets:{bench:[row(),row(),row()]},pain:'none',finishedAt:n+100,rating:3,...overrides});
+const seed=(history,ready={sleep:8,energy:4,soreness:1,stress:1,pain:'none'})=>{
+ const s=t.newState();s.history=history;s.readiness={[today]:ready};t.setState(s);return s;
+};
+seed([session(-3),session(-1)]);
+assert.equal(t.suggestion('bench').kind,'good');assert.equal(t.suggestion('bench').weight,42.5);
+seed([session(-3),session(-1,{sets:{bench:[row(),row()]}})]);assert.notEqual(t.suggestion('bench').kind,'good','incomplete workout');
+seed([session(-3),session(-1,{sets:{bench:[row(40,10,null),row(),row()]}})]);assert.notEqual(t.suggestion('bench').kind,'good','unknown RIR');
+seed([session(-3,{pain:'shoulder'}),session(-1)]);assert.notEqual(t.suggestion('bench').kind,'good','previous pain');
+seed([session(-3),session(-1,{mode:'light'})]);assert.notEqual(t.suggestion('bench').kind,'good','light workout');
+seed([session(-1),session(-1)]);assert.notEqual(t.suggestion('bench').kind,'good','same date');
+seed([session(-3),session(-1,{sets:{bench:[row(40),row(30),row(40)]}})]);assert.notEqual(t.suggestion('bench').kind,'good','mixed weights');
+seed([session(-3),session(-1)],{sleep:4,energy:2,soreness:4,stress:4,pain:'none'});assert.notEqual(t.suggestion('bench').kind,'good','low readiness');
+seed([session(-3),session(-1)]);t.getState().readiness={};assert.notEqual(t.suggestion('bench').kind,'good','missing readiness');
+seed([session(1),session(2)]);assert.notEqual(t.suggestion('bench').kind,'good','future history');
+seed([session(-3,{sets:{bench:[row(10),row(10),row(10)]}}),session(-1,{sets:{bench:[row(10),row(10),row(10)]}})]);assert.notEqual(t.suggestion('bench').kind,'good','step exceeds 10%');
+const variants=t.cleanSession(session(0,{format:'express',swaps:{bench:'chest_machine',press:'goblet',evil:'<script>'},index:5,sets:{chest_machine:[row(15,12,2)],bench:[row()],goblet:[row()]}}),true);
+assert.equal(variants.index,2);assert.equal(JSON.stringify(t.sessionExerciseIds(variants)),JSON.stringify(['chest_machine','press','knee']));
+assert.deepEqual(Object.keys(variants.sets),['chest_machine']);
+const old=t.normalizeState({version:4,profile:{name:'Legacy'},history:[session(-1)],body:[],photos:[]});
+assert.equal(old.history.length,1);assert.equal(old.history[0].format,'full');assert.equal(old.profile.name,'Legacy');
+seed([session(-2),session(-1),session(1)]);
+const l=t.loadStats(day(-3),today);assert.equal(l.strengthSets,6);assert.equal(l.groups['Грудь'],6);assert.equal(l.rir,2);
+console.log('PASS: progression gates, missing RIR, pain, readiness, dates, equipment isolation, legacy migration and workload totals.');

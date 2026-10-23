@@ -7,3 +7,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "BodyDreamElite"
 include(":app")
+
