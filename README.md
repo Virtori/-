@@ -1,6 +1,12 @@
-# BodyDream Coach 4.5
+# BodyDream Coach 4.6
 
 Offline Android coach: strength sessions, football, exercise technique, local journal and JSON backups.
+
+## Muscle map in each set (4.6)
+
+A compact front/back figure is visible inside the working-set card. Main groups use peach and assisting/stabilizing groups use teal; names and roles are also written out. The counter advances with completed sets. Changing exercise or equipment substitution updates the map, and an expansion button enlarges the figure. All 24 exercises/stages have mappings; cooldown is labeled as stretching, not muscle activation.
+
+The map is an exercise-level reference, not live muscle sensing or percentage activation. Surface regions are approximate; the hip-flexor region is explicitly described as deep. General muscle-role references are the NASM and ACE exercise libraries, including NASM Face Pull and Dumbbell Romanian Deadlift. The same signing key and application ID are retained for in-place updates from 4.4/4.5.
 
 ## Visual movement atlas (4.5)
 

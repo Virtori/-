@@ -1,4 +1,4 @@
-name: Build BodyDream Coach 4.5 APK
+name: Build BodyDream Coach 4.6 APK
 
 on:
   workflow_dispatch:
@@ -40,6 +40,7 @@ jobs:
           node --check app/src/main/assets/data.js
           node --check app/src/main/assets/app.js
           node --check app/src/main/assets/visuals.js
+          node --check app/src/main/assets/muscles.js
           node tests/coach-rules.cjs
 
       - name: Verify interface, progress and backup compatibility
@@ -53,17 +54,18 @@ jobs:
           server_pid=$!
           trap 'kill "$server_pid"' EXIT
           curl --retry 10 --retry-connrefused --retry-delay 1 -fsS http://127.0.0.1:8765/ -o /dev/null
-          (node tests/verify43.cjs && node tests/verify44.cjs && node tests/visuals.cjs) 2>&1 | tee ui-test-output.txt
+          (node tests/verify43.cjs && node tests/verify44.cjs && node tests/visuals.cjs && node tests/muscles.cjs) 2>&1 | tee ui-test-output.txt
 
       - name: Interface review images and test log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: BodyDream-4.5-interface-review
+          name: BodyDream-4.6-interface-review
           path: |
             *43*.png
             *44*.png
             *45*.png
+            *46*.png
             ui-test-output.txt
           if-no-files-found: ignore
 
@@ -82,7 +84,7 @@ jobs:
       - name: Unsigned APK for private signing
         uses: actions/upload-artifact@v4
         with:
-          name: BodyDream-Coach-4.5-unsigned
+          name: BodyDream-Coach-4.6-unsigned
           path: |
             app/build/outputs/apk/release/app-release-unsigned.apk
             app/build/outputs/apk/release/APK-SHA256.txt
