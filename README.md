@@ -1,8 +1,16 @@
-# BodyDream Coach 4.4
+# BodyDream Coach 4.5
 
 Offline Android coach: strength sessions, football, exercise technique, local journal and JSON backups.
 
-## What's new
+## Visual movement atlas (4.5)
+
+24 exercise-specific offline vector diagrams replace generic movement patterns. Each card has two selectable phases, breathing cues, equipment context and a slow two-frame autoplay with pause. These are educational schematic positions, not filmed demonstrations or individually prescribed joint angles. The runner has a shortcut to the illustration inside its technique panel.
+
+Leg press, seated leg curl, triceps pressdown, face pull, incline press and equipment substitutions now have separate geometry. Ambiguous exercise names specify which variant is shown. The football cards show examples of stages rather than claiming to demonstrate the full activity.
+
+The same private signing bundle and application ID used for 4.4 are retained. 4.5 installs over 4.4 and keeps local data. Export a JSON backup before updates as a precaution.
+
+## Training tools (4.4)
 
 - Previous weights and repetitions beside the active exercise, with optional copying into unfinished rows. RIR must be entered again.
 - Full or express sessions. Express keeps three selected exercises per strength plan.
@@ -32,3 +40,5 @@ Actions checks JS syntax, progression and normalization rules, legacy backups, s
 - NASM exercise library: https://www.nasm.org/resource-center/exercise-library
 
 The exercise library is educational. Recommendations derive from the user's entries and cannot verify actual technique. No camera AI, cloud coach or automatic calendar write is connected.
+
+Visual-reference sources: ACE Triceps Pressdown https://www.acefitness.org/resources/everyone/exercise-library/3/triceps-pressdown/ ; NASM Leg Press https://www.nasm.org/resource-center/exercise-library/leg-press ; NASM Seated Leg Curl https://www.nasm.org/resource-center/exercise-library/seated-leg-curl ; NASM Face Pull https://www.nasm.org/resource-center/exercise-library/face-pull . Diagrams are original vector drawings and require visual review; neither source has endorsed these drawings.

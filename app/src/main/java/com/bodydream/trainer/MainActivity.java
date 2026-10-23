@@ -116,7 +116,8 @@ public class MainActivity extends Activity {
                 }
                 String asset = url.substring(OFFLINE_ORIGIN.length());
                 if (!asset.equals("index.html") && !asset.equals("app.css")
-                    && !asset.equals("app.js") && !asset.equals("data.js")) {
+                    && !asset.equals("app.js") && !asset.equals("data.js")
+                    && !asset.equals("visuals.js") && !asset.equals("visuals.css")) {
                     return emptyResponse();
                 }
                 String mime = asset.endsWith(".html") ? "text/html"

@@ -10,8 +10,8 @@ android {
         applicationId = "com.bodydream.trainer.coach"
         minSdk = 24
         targetSdk = 35
-        versionCode = 8
-        versionName = "4.4.0-coach"
+        versionCode = 9
+        versionName = "4.5.0-visual"
     }
 
     buildTypes {

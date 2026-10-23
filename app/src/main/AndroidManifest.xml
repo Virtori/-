@@ -5,7 +5,7 @@
     <application
         android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
-        android:label="BodyDream 4.4"
+        android:label="BodyDream Coach"
         android:roundIcon="@drawable/ic_launcher"
         android:supportsRtl="true"
         android:resizeableActivity="true"
